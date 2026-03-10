@@ -1,0 +1,12 @@
+fred
+pandas 
+numpy 
+scipy 
+matplotlib 
+seaborn 
+pandas-datareader 
+fredapi 
+yfinance 
+requests
+torch
+transformers
