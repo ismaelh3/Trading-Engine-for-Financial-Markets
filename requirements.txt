@@ -8,5 +8,6 @@ pandas-datareader
 fredapi 
 yfinance 
 requests
+python-dotenv
 torch
 transformers
