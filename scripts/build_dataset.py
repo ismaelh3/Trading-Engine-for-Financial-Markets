@@ -10,7 +10,7 @@ from pathlib import Path
 import pandas as pd
 
 
-DEFAULT_ALPHA_FILE = "data/raw/alpha_vantage/alpha_vantage_spy.jsonl"
+DEFAULT_MARKET_FILE = "data/raw/yfinance/yfinance_spy.jsonl"
 DEFAULT_FRED_DIR = "data/raw/fred"
 DEFAULT_OUTPUT = "data/processed/merged_market_macro.csv"
 
@@ -36,7 +36,7 @@ def read_json_or_jsonl(path: Path) -> list[dict]:
         return json.load(handle)
 
 
-def load_alpha_vantage_market_data(path: Path) -> pd.DataFrame:
+def load_market_data(path: Path) -> pd.DataFrame:
     records = read_json_or_jsonl(path)
     if not records:
         raise ValueError(f"No market records found in {path}")
@@ -108,6 +108,27 @@ def load_fred_dataset(raw_dir: Path) -> pd.DataFrame:
     return merged_fred
 
 
+def align_market_to_fred_coverage(
+    market_df: pd.DataFrame,
+    fred_df: pd.DataFrame,
+    coverage_mode: str,
+) -> pd.DataFrame:
+    if coverage_mode == "all":
+        return market_df
+
+    overlap_start = max(market_df["date"].min(), fred_df["date"].min())
+    overlap_end = min(market_df["date"].max(), fred_df["date"].max())
+
+    aligned_market_df = market_df[
+        (market_df["date"] >= overlap_start) & (market_df["date"] <= overlap_end)
+    ].copy()
+    if aligned_market_df.empty:
+        raise ValueError(
+            "No overlapping date range between market data and FRED data.",
+        )
+    return aligned_market_df
+
+
 def merge_market_and_macro(
     market_df: pd.DataFrame,
     fred_df: pd.DataFrame,
@@ -152,12 +173,14 @@ def infer_output_format(output_path: Path, explicit_format: str | None) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Build a merged daily dataset from Alpha Vantage and FRED raw files.",
+        description="Build a merged daily dataset from market data and FRED raw files.",
     )
     parser.add_argument(
+        "--market-file",
         "--alpha-file",
-        default=DEFAULT_ALPHA_FILE,
-        help="Path to raw Alpha Vantage JSON or JSONL file.",
+        dest="market_file",
+        default=DEFAULT_MARKET_FILE,
+        help="Path to raw market-data JSON or JSONL file.",
     )
     parser.add_argument(
         "--fred-dir",
@@ -174,15 +197,25 @@ def main() -> None:
         choices=("csv", "json", "jsonl"),
         help="Optional explicit output format override.",
     )
+    parser.add_argument(
+        "--coverage",
+        choices=("overlap", "all"),
+        default="overlap",
+        help=(
+            "Use overlap to keep only dates covered by both market and FRED data. "
+            "Use all to keep the full market series."
+        ),
+    )
     args = parser.parse_args()
 
-    alpha_path = Path(args.alpha_file)
+    market_path = Path(args.market_file)
     fred_dir = Path(args.fred_dir)
     output_path = Path(args.output)
     output_format = infer_output_format(output_path, args.format)
 
-    market_df = load_alpha_vantage_market_data(alpha_path)
+    market_df = load_market_data(market_path)
     fred_df = load_fred_dataset(fred_dir)
+    market_df = align_market_to_fred_coverage(market_df, fred_df, args.coverage)
     merged_df = merge_market_and_macro(market_df, fred_df)
 
     write_output(merged_df, output_path, output_format)
