@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create report-ready plots from Milestone 1 experiment artifacts."""
+"""Create report-ready plots from Milestone 1 classification experiment artifacts."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ import os
 import sys
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 
@@ -27,6 +28,11 @@ MODEL_LABELS = {
 }
 
 MODEL_ORDER = ["naive", "elastic_net", "xgboost", "lstm", "cnn", "ctts"]
+CLASS_LABELS = {
+    0: "Low Vol",
+    1: "Mid Vol",
+    2: "High Vol",
+}
 
 
 def _prepare_matplotlib() -> tuple:
@@ -39,9 +45,11 @@ def _prepare_matplotlib() -> tuple:
     os.environ.setdefault("MPLBACKEND", "Agg")
 
     import matplotlib
+
     matplotlib.use("Agg")
     import matplotlib.dates as mdates
     import matplotlib.pyplot as plt
+
     plt.style.use("seaborn-v0_8-whitegrid")
     return plt, mdates
 
@@ -66,9 +74,10 @@ def _resolve_artifact_path(
         results_path = Path(results_root) / model_name / "results.json"
         if results_path.exists():
             payload = _load_model_results(results_root, model_name)
-            artifact_path = payload.get("artifacts", {}).get(artifact_key)
-            if artifact_path:
-                return Path(str(artifact_path))
+            if payload.get("task_type") == "classification":
+                artifact_path = payload.get("artifacts", {}).get(artifact_key)
+                if artifact_path:
+                    return Path(str(artifact_path))
 
     if artifacts_dir is None:
         raise FileNotFoundError(
@@ -77,7 +86,7 @@ def _resolve_artifact_path(
     return Path(artifacts_dir) / fallback_filename
 
 
-def _discover_equity_models(
+def _discover_classification_models(
     results_root: str | Path | None,
     artifacts_dir: str | Path | None,
 ) -> list[str]:
@@ -87,21 +96,25 @@ def _discover_equity_models(
         root_path = Path(results_root)
         if root_path.exists():
             for model_name in MODEL_ORDER:
-                if (root_path / model_name / "results.json").exists():
+                results_path = root_path / model_name / "results.json"
+                if not results_path.exists():
+                    continue
+                payload = json.loads(results_path.read_text(encoding="utf-8"))
+                if payload.get("task_type") == "classification":
                     discovered.add(model_name)
 
     if artifacts_dir is not None:
         artifacts_path = Path(artifacts_dir)
         if artifacts_path.exists():
-            for path in artifacts_path.glob("backtest_*.csv"):
-                model_name = path.stem.removeprefix("backtest_")
+            for path in artifacts_path.glob("predictions_*.csv"):
+                model_name = path.stem.removeprefix("predictions_")
                 if model_name in MODEL_LABELS:
                     discovered.add(model_name)
 
     return [model_name for model_name in MODEL_ORDER if model_name in discovered]
 
 
-def plot_predicted_vs_realized(
+def plot_class_timeline(
     predictions_path: str | Path,
     output_path: str | Path,
     model_label: str,
@@ -110,31 +123,89 @@ def plot_predicted_vs_realized(
     df = _load_csv(predictions_path)
 
     fig, ax = plt.subplots(figsize=(11, 5.5))
-    ax.plot(
+    ax.step(
         df["date"],
-        df["actual_vol"],
-        label="Realized 20-day volatility",
+        df["actual_class"],
+        where="mid",
         linewidth=2.2,
         color="#1f2937",
+        label="Actual class",
     )
-    ax.plot(
+    ax.step(
         df["date"],
-        df["predicted_vol"],
-        label=f"Predicted volatility ({model_label})",
+        df["predicted_class"],
+        where="mid",
         linewidth=1.8,
         color="#0f766e",
         alpha=0.95,
+        label=f"Predicted class ({model_label})",
     )
 
-    ax.set_title(f"Predicted vs. Realized SPY Volatility: {model_label}")
-    ax.set_ylabel("Annualized volatility")
+    ax.set_title(f"Predicted vs. Actual Volatility Class: {model_label}")
+    ax.set_ylabel("Volatility Regime")
     ax.set_xlabel("Date")
+    ax.set_yticks(list(CLASS_LABELS.keys()))
+    ax.set_yticklabels(list(CLASS_LABELS.values()))
     ax.legend(frameon=True)
     ax.xaxis.set_major_locator(mdates.YearLocator())
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y"))
     fig.autofmt_xdate()
     fig.tight_layout()
 
+    output = Path(output_path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+
+
+def plot_confusion_matrix(
+    predictions_path: str | Path,
+    output_path: str | Path,
+    model_label: str,
+) -> None:
+    plt, _ = _prepare_matplotlib()
+    df = _load_csv(predictions_path)
+    actual = df["actual_class"].to_numpy(dtype=int)
+    predicted = df["predicted_class"].to_numpy(dtype=int)
+
+    matrix = np.zeros((3, 3), dtype=int)
+    for actual_class, predicted_class in zip(actual, predicted, strict=False):
+        matrix[actual_class, predicted_class] += 1
+
+    row_totals = matrix.sum(axis=1, keepdims=True)
+    normalized = np.divide(
+        matrix,
+        row_totals,
+        out=np.zeros_like(matrix, dtype=float),
+        where=row_totals != 0,
+    )
+
+    fig, ax = plt.subplots(figsize=(6.8, 5.8))
+    image = ax.imshow(normalized, cmap="Blues", vmin=0.0, vmax=1.0)
+    fig.colorbar(image, ax=ax, fraction=0.046, pad=0.04, label="Row-normalized share")
+
+    tick_labels = [CLASS_LABELS[class_id] for class_id in range(3)]
+    ax.set_xticks(range(3))
+    ax.set_yticks(range(3))
+    ax.set_xticklabels(tick_labels, rotation=20, ha="right")
+    ax.set_yticklabels(tick_labels)
+    ax.set_xlabel("Predicted class")
+    ax.set_ylabel("Actual class")
+    ax.set_title(f"Confusion Matrix: {model_label}")
+
+    for row in range(3):
+        for col in range(3):
+            ax.text(
+                col,
+                row,
+                f"{matrix[row, col]}\n{normalized[row, col]:.0%}",
+                ha="center",
+                va="center",
+                color="#111827" if normalized[row, col] < 0.55 else "white",
+                fontsize=10,
+            )
+
+    fig.tight_layout()
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output, dpi=200, bbox_inches="tight")
@@ -150,9 +221,12 @@ def plot_equity_curves(
     fig, ax = plt.subplots(figsize=(11, 5.5))
     benchmark_plotted = False
     palette = {
+        "Naive": "#6b7280",
         "Elastic Net": "#1d4ed8",
         "XGBoost": "#b45309",
         "LSTM": "#059669",
+        "1D CNN": "#7c3aed",
+        "CTTS": "#b91c1c",
         "Buy-and-Hold SPY": "#111827",
     }
 
@@ -176,7 +250,7 @@ def plot_equity_curves(
             )
             benchmark_plotted = True
 
-    ax.set_title("Cumulative Equity Curves: Milestone 1 Out-of-Sample Test")
+    ax.set_title("Cumulative Equity Curves: Classification Walk-Forward Test")
     ax.set_ylabel("Cumulative wealth")
     ax.set_xlabel("Date")
     ax.legend(frameon=True, ncol=2)
@@ -208,10 +282,25 @@ def plot_training_curve(
         linewidth=2.0,
         color="#b45309",
     )
+    if "validation_score" in df.columns:
+        ax2 = ax.twinx()
+        ax2.plot(
+            df["epoch"],
+            df["validation_score"],
+            label="Validation score",
+            linewidth=1.8,
+            color="#059669",
+            linestyle="--",
+        )
+        ax2.set_ylabel("Validation score")
+        lines, labels = ax.get_legend_handles_labels()
+        lines2, labels2 = ax2.get_legend_handles_labels()
+        ax.legend(lines + lines2, labels + labels2, frameon=True)
+    else:
+        ax.legend(frameon=True)
     ax.set_title(f"Training Curve: {model_label}")
     ax.set_xlabel("Epoch")
     ax.set_ylabel("Loss")
-    ax.legend(frameon=True)
     fig.tight_layout()
 
     output = Path(output_path)
@@ -222,12 +311,12 @@ def plot_training_curve(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Create report-ready plots from a completed Milestone 1 artifact directory.",
+        description="Create report-ready plots from a completed Milestone 1 classification artifact directory.",
     )
     parser.add_argument(
         "--artifacts-dir",
-        default="artifacts/m1",
-        help="Fallback directory containing predictions_*.csv and backtest_*.csv files.",
+        default="artifacts/m1_classification",
+        help="Fallback directory containing classification predictions_*.csv and backtest_*.csv files.",
     )
     parser.add_argument(
         "--results-root",
@@ -235,10 +324,10 @@ def main() -> None:
         help="Directory containing per-model results.json files.",
     )
     parser.add_argument(
-        "--forecast-model",
+        "--classification-model",
         default="elastic_net",
         choices=tuple(MODEL_ORDER),
-        help="Model to use for the predicted-vs-realized volatility figure.",
+        help="Model to use for the class timeline and confusion matrix figures.",
     )
     parser.add_argument(
         "--equity-models",
@@ -250,7 +339,7 @@ def main() -> None:
     parser.add_argument(
         "--output-dir",
         default=None,
-        help="Directory for the generated figure files. Defaults to the artifact directory.",
+        help="Directory for generated figure files. Defaults to the artifact directory.",
     )
     args = parser.parse_args()
 
@@ -260,38 +349,45 @@ def main() -> None:
         artifacts_dir if artifacts_dir is not None else Path(".")
     )
 
-    plot_predicted_vs_realized(
-        predictions_path=_resolve_artifact_path(
-            model_name=args.forecast_model,
-            artifact_key="predictions_csv",
-            results_root=results_root,
-            artifacts_dir=artifacts_dir,
-            fallback_filename=f"predictions_{args.forecast_model}.csv",
-        ),
-        output_path=output_dir / f"forecast_vs_realized_{args.forecast_model}.png",
-        model_label=MODEL_LABELS[args.forecast_model],
+    predictions_path = _resolve_artifact_path(
+        model_name=args.classification_model,
+        artifact_key="predictions_csv",
+        results_root=results_root,
+        artifacts_dir=artifacts_dir,
+        fallback_filename=f"predictions_{args.classification_model}.csv",
+    )
+
+    plot_class_timeline(
+        predictions_path=predictions_path,
+        output_path=output_dir / f"class_timeline_{args.classification_model}.png",
+        model_label=MODEL_LABELS[args.classification_model],
+    )
+    plot_confusion_matrix(
+        predictions_path=predictions_path,
+        output_path=output_dir / f"confusion_matrix_{args.classification_model}.png",
+        model_label=MODEL_LABELS[args.classification_model],
     )
     training_history_path = _resolve_artifact_path(
-        model_name=args.forecast_model,
+        model_name=args.classification_model,
         artifact_key="training_history_csv",
         results_root=results_root,
         artifacts_dir=artifacts_dir,
-        fallback_filename=f"training_history_{args.forecast_model}.csv",
+        fallback_filename=f"training_history_{args.classification_model}.csv",
     )
     if training_history_path.exists():
         plot_training_curve(
             training_history_path=training_history_path,
-            output_path=output_dir / f"training_curve_{args.forecast_model}.png",
-            model_label=MODEL_LABELS[args.forecast_model],
+            output_path=output_dir / f"training_curve_{args.classification_model}.png",
+            model_label=MODEL_LABELS[args.classification_model],
         )
 
-    equity_models = args.equity_models or _discover_equity_models(
+    equity_models = args.equity_models or _discover_classification_models(
         results_root=results_root,
         artifacts_dir=artifacts_dir,
     )
     if not equity_models:
         raise FileNotFoundError(
-            "No equity models were found in the provided results or artifacts directories.",
+            "No classification models were found in the provided results or artifacts directories.",
         )
 
     plot_equity_curves(
@@ -305,13 +401,14 @@ def main() -> None:
             )
             for model_name in equity_models
         },
-        output_path=output_dir / "equity_curves_m1.png",
+        output_path=output_dir / "equity_curves_m1_classification.png",
     )
 
-    print(f"saved forecast plot -> {output_dir / f'forecast_vs_realized_{args.forecast_model}.png'}")
+    print(f"saved class timeline -> {output_dir / f'class_timeline_{args.classification_model}.png'}")
+    print(f"saved confusion matrix -> {output_dir / f'confusion_matrix_{args.classification_model}.png'}")
     if training_history_path.exists():
-        print(f"saved training curve -> {output_dir / f'training_curve_{args.forecast_model}.png'}")
-    print(f"saved equity plot -> {output_dir / 'equity_curves_m1.png'}")
+        print(f"saved training curve -> {output_dir / f'training_curve_{args.classification_model}.png'}")
+    print(f"saved equity plot -> {output_dir / 'equity_curves_m1_classification.png'}")
 
 
 if __name__ == "__main__":

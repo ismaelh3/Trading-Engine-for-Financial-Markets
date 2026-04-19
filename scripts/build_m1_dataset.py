@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from m1_pipeline.data import build_m1_dataset, load_merged_market_macro_dataset, save_dataset
+from pipeline.data import build_m1_dataset, load_merged_market_macro_dataset, save_dataset
 
 
 DEFAULT_INPUT = "data/processed/merged_market_macro.csv"
