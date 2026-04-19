@@ -66,6 +66,57 @@ def run_backtest(
     return strategy_df
 
 
+def apply_classification_allocation_rule(predicted_class: int) -> float:
+    if predicted_class <= 0:
+        return 1.0
+    if predicted_class == 1:
+        return 0.5
+    return 0.0
+
+
+def build_classification_strategy_weights(
+    prediction_df: pd.DataFrame,
+    rebalance_every_days: int,
+) -> pd.DataFrame:
+    strategy_df = prediction_df.sort_values("date").reset_index(drop=True).copy()
+    strategy_df["signal_weight"] = np.nan
+
+    for index in range(len(strategy_df)):
+        if index % rebalance_every_days != 0:
+            continue
+        strategy_df.loc[index, "signal_weight"] = apply_classification_allocation_rule(
+            predicted_class=int(strategy_df.loc[index, "predicted_class"]),
+        )
+
+    strategy_df["signal_weight"] = strategy_df["signal_weight"].ffill().fillna(0.0)
+    strategy_df["applied_weight"] = strategy_df["signal_weight"].shift(1).fillna(0.0)
+    return strategy_df
+
+
+def run_classification_backtest(
+    prediction_df: pd.DataFrame,
+    rebalance_every_days: int = 5,
+    transaction_cost_bps: float = 10.0,
+) -> pd.DataFrame:
+    strategy_df = build_classification_strategy_weights(
+        prediction_df=prediction_df,
+        rebalance_every_days=rebalance_every_days,
+    )
+    cost_rate = transaction_cost_bps / 10_000.0
+
+    strategy_df["turnover"] = strategy_df["signal_weight"].diff().abs().fillna(0.0)
+    strategy_df["transaction_cost"] = strategy_df["turnover"] * cost_rate
+    strategy_df["strategy_return"] = (
+        strategy_df["applied_weight"] * strategy_df["asset_return_1d"]
+        - strategy_df["transaction_cost"]
+    )
+    strategy_df["benchmark_return"] = strategy_df["asset_return_1d"]
+    strategy_df["cash_return"] = 0.0
+    strategy_df["strategy_equity"] = (1.0 + strategy_df["strategy_return"]).cumprod()
+    strategy_df["benchmark_equity"] = (1.0 + strategy_df["benchmark_return"]).cumprod()
+    return strategy_df
+
+
 def annualized_return(daily_returns: pd.Series) -> float:
     if daily_returns.empty:
         return math.nan
@@ -115,4 +166,3 @@ def summarize_backtest(strategy_df: pd.DataFrame) -> dict[str, float]:
         "benchmark_max_drawdown": max_drawdown(strategy_df["benchmark_equity"]),
         "observations": float(len(strategy_df)),
     }
-

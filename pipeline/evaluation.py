@@ -44,3 +44,54 @@ def summarize_predictions(prediction_df: pd.DataFrame) -> dict[str, float]:
         "n_predictions": float(len(prediction_df)),
     }
 
+
+def classification_accuracy(y_true: np.ndarray, y_pred: np.ndarray) -> float:
+    if len(y_true) == 0:
+        return math.nan
+    return float(np.mean(y_true == y_pred))
+
+
+def balanced_accuracy(y_true: np.ndarray, y_pred: np.ndarray) -> float:
+    classes = np.unique(y_true)
+    if len(classes) == 0:
+        return math.nan
+    recalls = []
+    for class_id in classes:
+        mask = y_true == class_id
+        if not np.any(mask):
+            continue
+        recalls.append(float(np.mean(y_pred[mask] == class_id)))
+    if not recalls:
+        return math.nan
+    return float(np.mean(recalls))
+
+
+def macro_f1_score(y_true: np.ndarray, y_pred: np.ndarray) -> float:
+    classes = np.unique(np.concatenate([y_true, y_pred]))
+    if len(classes) == 0:
+        return math.nan
+    f1_scores: list[float] = []
+    for class_id in classes:
+        true_positive = float(np.sum((y_true == class_id) & (y_pred == class_id)))
+        false_positive = float(np.sum((y_true != class_id) & (y_pred == class_id)))
+        false_negative = float(np.sum((y_true == class_id) & (y_pred != class_id)))
+        precision_denom = true_positive + false_positive
+        recall_denom = true_positive + false_negative
+        precision = true_positive / precision_denom if precision_denom > 0 else 0.0
+        recall = true_positive / recall_denom if recall_denom > 0 else 0.0
+        if precision + recall == 0.0:
+            f1_scores.append(0.0)
+        else:
+            f1_scores.append(2.0 * precision * recall / (precision + recall))
+    return float(np.mean(f1_scores))
+
+
+def summarize_classification_predictions(prediction_df: pd.DataFrame) -> dict[str, float]:
+    y_true = prediction_df["actual_class"].to_numpy(dtype=int)
+    y_pred = prediction_df["predicted_class"].to_numpy(dtype=int)
+    return {
+        "accuracy": classification_accuracy(y_true, y_pred),
+        "balanced_accuracy": balanced_accuracy(y_true, y_pred),
+        "macro_f1": macro_f1_score(y_true, y_pred),
+        "n_predictions": float(len(prediction_df)),
+    }

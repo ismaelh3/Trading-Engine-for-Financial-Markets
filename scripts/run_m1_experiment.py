@@ -427,6 +427,7 @@ def _tune_model(
                 epochs=args.tuning_torch_epochs,
                 batch_size=args.torch_batch_size,
                 learning_rate=args.torch_learning_rate,
+                device_name=args.torch_device,
             )
         else:
             raise ValueError(f"Unsupported model {model_name}.")
@@ -474,6 +475,7 @@ def _tune_model(
             batch_size=args.torch_batch_size,
             learning_rate=args.torch_learning_rate,
             training_loss=args.torch_loss,
+            device_name=args.torch_device,
         )
     else:
         raise ValueError(f"Unsupported model {model_name}.")
@@ -537,6 +539,8 @@ def _build_worker_command(
         str(args.torch_learning_rate),
         "--torch-loss",
         args.torch_loss,
+        "--torch-device",
+        args.torch_device,
         "--torch-log-epochs" if args.torch_log_epochs else "",
         "--rebalance-every-days",
         str(args.rebalance_every_days),
@@ -655,6 +659,7 @@ def _run_models_isolated(
         "tuning_mode": args.tuning_mode,
         "tuning_metric": args.tuning_metric,
         "torch_loss": args.torch_loss,
+        "torch_device": args.torch_device,
         "execution_mode": "isolated_workers",
     }
     _write_json(output_dir / "run_manifest.json", manifest)
@@ -733,6 +738,7 @@ def _run_single_model(
                 batch_size=args.torch_batch_size,
                 learning_rate=args.torch_learning_rate,
                 metric=args.tuning_metric,
+                device_name=args.torch_device,
                 log_epoch_losses=args.torch_log_epochs and block.block_id == 0,
                 model_params=selected_params,
             )
@@ -775,6 +781,7 @@ def _run_single_model(
                 batch_size=args.torch_batch_size,
                 learning_rate=args.torch_learning_rate,
                 training_loss=args.torch_loss,
+                device_name=args.torch_device,
                 log_epoch_losses=args.torch_log_epochs and block.block_id == 0,
                 model_params=selected_params,
             )
@@ -939,6 +946,12 @@ def main() -> None:
         choices=("mse", "huber", "qlike"),
         default="qlike",
         help="Training loss used by the sequence models.",
+    )
+    parser.add_argument(
+        "--torch-device",
+        choices=("auto", "cpu", "mps", "cuda"),
+        default="auto",
+        help="Device used by the torch sequence models. Sklearn and XGBoost models remain on CPU.",
     )
     parser.add_argument(
         "--torch-log-epochs",
@@ -1111,6 +1124,7 @@ def main() -> None:
             "test_start_date": args.test_start_date,
             "selected_params": selected_params,
             "torch_loss": args.torch_loss if model_name in {"lstm", "cnn", "ctts"} else None,
+            "torch_device": args.torch_device if model_name in {"lstm", "cnn", "ctts"} else None,
             "metrics": metric_summary,
             "backtest": backtest_summary,
             "artifacts": {
@@ -1164,6 +1178,7 @@ def main() -> None:
         "tuning_mode": args.tuning_mode,
         "tuning_metric": args.tuning_metric,
         "torch_loss": args.torch_loss,
+        "torch_device": args.torch_device,
     }
     _write_json(output_dir / "run_manifest.json", manifest)
 

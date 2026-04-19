@@ -66,9 +66,10 @@ def _resolve_artifact_path(
         results_path = Path(results_root) / model_name / "results.json"
         if results_path.exists():
             payload = _load_model_results(results_root, model_name)
-            artifact_path = payload.get("artifacts", {}).get(artifact_key)
-            if artifact_path:
-                return Path(str(artifact_path))
+            if payload.get("task_type") == "regression":
+                artifact_path = payload.get("artifacts", {}).get(artifact_key)
+                if artifact_path:
+                    return Path(str(artifact_path))
 
     if artifacts_dir is None:
         raise FileNotFoundError(
@@ -87,7 +88,11 @@ def _discover_equity_models(
         root_path = Path(results_root)
         if root_path.exists():
             for model_name in MODEL_ORDER:
-                if (root_path / model_name / "results.json").exists():
+                results_path = root_path / model_name / "results.json"
+                if not results_path.exists():
+                    continue
+                payload = json.loads(results_path.read_text(encoding="utf-8"))
+                if payload.get("task_type") == "regression":
                     discovered.add(model_name)
 
     if artifacts_dir is not None:

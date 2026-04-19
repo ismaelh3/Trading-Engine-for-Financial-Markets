@@ -1,0 +1,48 @@
+{
+  "model": "lstm",
+  "input": "data/processed/m1/m1_dataset.csv",
+  "target_column": "target_log_future_vol_20d",
+  "task_type": "regression",
+  "classification_source_column": "target_future_vol_20d",
+  "test_start_date": "2022-01-03",
+  "selected_params": {
+    "lookback_window": 60,
+    "hidden_size": 16,
+    "dense_size": 16,
+    "dropout": 0.1,
+    "learning_rate": 0.0005
+  },
+  "torch_loss": "qlike",
+  "torch_device": "auto",
+  "metrics": {
+    "mae": 0.03888796027212017,
+    "rmse": 0.060244521068952686,
+    "r2": 0.4051607436050736,
+    "qlike": -2.6331714028884075,
+    "prediction_correlation": 0.6500284567699075,
+    "n_predictions": 1036.0,
+    "model": "lstm"
+  },
+  "backtest": {
+    "strategy_annualized_return": 0.061322062467308314,
+    "strategy_annualized_volatility": 0.09815636004990771,
+    "strategy_sharpe_ratio": 0.6247385542427311,
+    "strategy_max_drawdown": -0.14507549460469604,
+    "strategy_average_weight": 0.6853281853281853,
+    "strategy_turnover_total": 15.0,
+    "benchmark_annualized_return": 0.10783972032943678,
+    "benchmark_annualized_volatility": 0.1782841709271297,
+    "benchmark_sharpe_ratio": 0.6048754624072277,
+    "benchmark_max_drawdown": -0.24496408139383452,
+    "observations": 1036.0,
+    "model": "lstm"
+  },
+  "artifacts": {
+    "predictions_csv": "artifacts/m1/_model_runs/lstm/predictions_lstm.csv",
+    "backtest_csv": "artifacts/m1/_model_runs/lstm/backtest_lstm.csv",
+    "tuning_summary_csv": "artifacts/m1/_model_runs/lstm/tuning_summary_lstm.csv",
+    "selected_params_json": "artifacts/m1/_model_runs/lstm/selected_params_lstm.json",
+    "training_history_csv": "artifacts/m1/_model_runs/lstm/training_history_lstm.csv",
+    "explainability_csv": null
+  }
+}
