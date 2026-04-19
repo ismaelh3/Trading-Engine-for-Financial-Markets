@@ -1,10 +1,22 @@
 # Trading-Engine-for-Financial-Markets
 
-Daily SPY market data comes from `yfinance`, and macro-financial series come from FRED.
+This repo builds a daily SPY + FRED dataset, engineers Milestone 1 features, and runs Milestone 2 walk-forward experiments for:
+
+- regression: forecast future 20-day volatility
+- classification: predict low / medium / high volatility regimes
+
+Implemented model families:
+
+- `naive`
+- `elastic_net`
+- `xgboost`
+- `lstm`
+- `cnn`
+- `ctts`
 
 ## Setup
 
-Create and activate your environment, then install dependencies:
+Create and activate a virtual environment, then install dependencies:
 
 ```bash
 python -m venv venv
@@ -12,11 +24,11 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-If you plan to run `elastic_net` and `xgboost`, make sure those packages are installed in the same interpreter you use to launch the experiment.
+If you run `elastic_net` or `xgboost`, make sure `scikit-learn` and `xgboost` are installed in the same interpreter you use to launch the scripts.
 
 ## Refresh Data
 
-Download raw SPY history:
+Download SPY history:
 
 ```bash
 python scripts/download_yfinance.py --symbols SPY --format jsonl
@@ -33,14 +45,20 @@ python scripts/download_fred.py \
 
 `scripts/download_fred.py` expects `FRED_API_KEY` in the environment or in `.env`.
 
-Build the merged market + FRED dataset:
+Build the merged market + macro dataset:
 
 ```bash
 python scripts/build_dataset.py \
   --market-file data/raw/yfinance/yfinance_spy.jsonl
 ```
 
-By default, the builder keeps only the overlapping date range covered by both market data and FRED data. Use `--coverage all` if you want to keep the full market series with partial macro coverage.
+By default the merge keeps only the overlapping SPY/FRED range. If you want the full market series even when some macro series start later, use:
+
+```bash
+python scripts/build_dataset.py \
+  --market-file data/raw/yfinance/yfinance_spy.jsonl \
+  --coverage all
+```
 
 Build the engineered Milestone 1 dataset:
 
@@ -50,14 +68,15 @@ python scripts/build_m1_dataset.py \
   --output data/processed/m1/m1_dataset.csv
 ```
 
-## Run Regression Experiments
+## Run Regression
 
-Run the full regression ladder:
+Recommended full regression run:
 
 ```bash
 python scripts/run_m1_experiment.py \
   --input data/processed/m1/m1_dataset.csv \
   --output-dir artifacts/m1 \
+  --results-root results/regression \
   --models naive elastic_net xgboost lstm cnn ctts \
   --task-type regression \
   --test-start-date 2022-01-03 \
@@ -66,29 +85,28 @@ python scripts/run_m1_experiment.py \
   --torch-loss qlike
 ```
 
-If you want epoch-level loss prints for sequence models:
+Run only the sequence models and print epoch losses:
 
 ```bash
 python scripts/run_m1_experiment.py \
   --input data/processed/m1/m1_dataset.csv \
   --output-dir artifacts/m1 \
-  --models cnn ctts \
+  --results-root results/regression \
+  --models lstm cnn ctts \
   --task-type regression \
-  --test-start-date 2022-01-03 \
-  --tuning-mode default \
-  --tuning-metric qlike \
   --torch-loss qlike \
   --torch-log-epochs
 ```
 
-## Run Classification Experiments
+## Run Classification
 
-Run the full classification ladder:
+Recommended full classification run:
 
 ```bash
 python scripts/run_m1_experiment.py \
   --input data/processed/m1/m1_dataset.csv \
   --output-dir artifacts/m1_classification \
+  --results-root results/classification \
   --models naive elastic_net xgboost lstm cnn ctts \
   --task-type classification \
   --classification-source-column target_future_vol_20d \
@@ -97,14 +115,58 @@ python scripts/run_m1_experiment.py \
   --tuning-metric macro_f1
 ```
 
-## Output Structure
+Sequence-model classification run with epoch logs:
 
-Each run writes:
+```bash
+python scripts/run_m1_experiment.py \
+  --input data/processed/m1/m1_dataset.csv \
+  --output-dir artifacts/m1_classification \
+  --results-root results/classification \
+  --models lstm cnn ctts \
+  --task-type classification \
+  --classification-source-column target_future_vol_20d \
+  --tuning-metric macro_f1 \
+  --torch-log-epochs
+```
+
+## MPS / Device Selection
+
+Only the torch sequence models can use GPU-style acceleration in this repo:
+
+- `lstm`
+- `cnn`
+- `ctts`
+
+`naive`, `elastic_net`, and `xgboost` remain CPU-only.
+
+Device selection is controlled by `--torch-device`:
+
+- `auto`: prefer `cuda`, then `mps`, then `cpu`
+- `mps`: force Apple Metal
+- `cuda`: force CUDA
+- `cpu`: force CPU
+
+Example on Apple Silicon:
+
+```bash
+python scripts/run_m1_experiment.py \
+  --input data/processed/m1/m1_dataset.csv \
+  --output-dir artifacts/m1 \
+  --results-root results/regression \
+  --models lstm cnn ctts \
+  --task-type regression \
+  --torch-device mps \
+  --torch-log-epochs
+```
+
+## Output Layout
+
+Each experiment writes:
 
 - CSV artifacts under `--output-dir`
-- per-model JSON summaries under `results/<model>/results.json`
+- per-model JSON summaries under `--results-root/<model>/results.json`
 
-Typical regression artifacts:
+Typical artifact files:
 
 - `predictions_<model>.csv`
 - `backtest_<model>.csv`
@@ -114,56 +176,91 @@ Typical regression artifacts:
 - `metrics_summary.csv`
 - `backtest_summary.csv`
 
-Typical classification artifacts are similar, but prediction files contain:
+Classification prediction files contain:
 
 - `predicted_class`
 - `actual_class`
-- `prob_class_0`, `prob_class_1`, `prob_class_2`
+- `prob_class_0`
+- `prob_class_1`
+- `prob_class_2`
+
+## Important Recommendation
+
+Use separate results roots for regression and classification:
+
+- `results/regression`
+- `results/classification`
+
+If you reuse the same `results/` folder for both tasks, the latest run for a model can overwrite `results/<model>/results.json`, which can confuse the plotting scripts.
 
 ## Plot Regression Results
 
-Plot forecast, training curve, and equity curve:
+The regression plotter creates:
+
+- one predicted-vs-realized figure for `--forecast-model`
+- one training-curve figure for `--forecast-model` if `training_history_<model>.csv` exists
+- one multi-model equity curve
+
+Example for CTTS:
 
 ```bash
 python scripts/plot_m1_results.py \
-  --results-root results \
+  --results-root results/regression \
   --artifacts-dir artifacts/m1 \
   --forecast-model ctts \
   --equity-models naive elastic_net xgboost lstm cnn ctts \
   --output-dir plots/regression
 ```
 
-If `results/<model>/results.json` points to older incompatible artifacts, force artifact-only resolution with:
+If you also want the CNN forecast/training figures, run it again with `--forecast-model cnn`:
 
 ```bash
 python scripts/plot_m1_results.py \
-  --results-root /tmp/no_results_here \
+  --results-root results/regression \
   --artifacts-dir artifacts/m1 \
-  --forecast-model ctts \
+  --forecast-model cnn \
   --equity-models naive elastic_net xgboost lstm cnn ctts \
   --output-dir plots/regression
 ```
 
 ## Plot Classification Results
 
-Plot classification timeline, confusion matrix, training curve, and equity curve:
+The classification plotter creates:
+
+- one class-timeline figure for `--classification-model`
+- one confusion matrix for `--classification-model`
+- one training-curve figure for `--classification-model` if `training_history_<model>.csv` exists
+- one multi-model equity curve
+
+Example for CTTS:
 
 ```bash
 python scripts/plot_m1_classification_results.py \
-  --results-root results \
+  --results-root results/classification \
   --artifacts-dir artifacts/m1_classification \
-  --classification-model elastic_net \
+  --classification-model ctts \
+  --equity-models naive elastic_net xgboost lstm cnn ctts \
+  --output-dir plots/classification
+```
+
+If you also want the CNN classification plots, run it again with `--classification-model cnn`:
+
+```bash
+python scripts/plot_m1_classification_results.py \
+  --results-root results/classification \
+  --artifacts-dir artifacts/m1_classification \
+  --classification-model cnn \
   --equity-models naive elastic_net xgboost lstm cnn ctts \
   --output-dir plots/classification
 ```
 
 ## Tuning Notes
 
-Useful tuning modes:
+Supported tuning modes:
 
-- `--tuning-mode off`: use the hard-coded defaults with no pre-test tuning
-- `--tuning-mode default`: run a modest pre-test grid search
-- `--tuning-mode full`: run a larger grid search
+- `--tuning-mode off`
+- `--tuning-mode default`
+- `--tuning-mode full`
 
 Regression tuning metrics:
 
@@ -177,12 +274,13 @@ Classification tuning metrics:
 - `balanced_accuracy`
 - `macro_f1`
 
-## Important Behavior
+## Current Behavior
 
-- Regression and classification are separate runs. Use `--task-type regression` or `--task-type classification`.
-- Sequence models are trained from scratch for each walk-forward block.
+- Regression and classification are separate runs.
+- Sequence models are retrained from scratch for each walk-forward block.
 - Sequence-model training history is saved for the first representative block only.
-- The backtest is a post-prediction strategy simulation, not model training.
+- The backtest is a post-prediction trading simulation, not model training.
+- Worker-mode subprocesses are used automatically when you run more than one model at once.
 
 ## Repository
 
