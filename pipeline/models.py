@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gc
 from dataclasses import dataclass
 
 import numpy as np
@@ -16,8 +17,9 @@ from .evaluation import (
     root_mean_squared_error,
 )
 
+import torch
 
-SEQUENCE_MODELS = {"lstm", "cnn", "ctts"}
+SEQUENCE_MODELS = {"lstm", "cnn", "cnn_lstm", "ctts"}
 
 
 def _require_sklearn() -> tuple:
@@ -515,6 +517,21 @@ def _resolve_torch_device(torch_module: object, requested_device: str) -> object
     raise ValueError(f"Unsupported torch device {requested_device}.")
 
 
+def _clear_torch_device_cache(torch_module: object, device: object) -> None:
+    gc.collect()
+    device_type = getattr(device, "type", str(device))
+    if device_type == "cuda" and hasattr(torch_module, "cuda"):
+        try:
+            torch_module.cuda.empty_cache()
+        except Exception:
+            pass
+    if device_type == "mps" and hasattr(torch_module, "mps"):
+        try:
+            torch_module.mps.empty_cache()
+        except Exception:
+            pass
+
+
 def _split_inner_validation_indices(
     train_index: np.ndarray,
     lookback_window: int,
@@ -561,6 +578,28 @@ def _build_sequence_loss(
         return torch.mean(torch.log(predicted_variance) + actual_variance / predicted_variance)
 
     return qlike_loss
+
+
+def _build_sequence_classification_loss(
+    nn: object,
+    torch: object,
+    class_targets: object,
+    device: object,
+    gamma: float = 2.0,
+) -> object:
+    class_counts = torch.bincount(class_targets, minlength=3).to(dtype=torch.float32, device=device)
+    class_counts = class_counts.clamp_min(1.0)
+    alpha = class_counts.sum() / (class_counts.shape[0] * class_counts)
+    alpha = alpha / alpha.mean()
+
+    def focal_loss(logits: object, targets: object) -> object:
+        ce_loss = nn.functional.cross_entropy(logits, targets, reduction="none")
+        probabilities = torch.softmax(logits, dim=1)
+        true_probabilities = probabilities.gather(1, targets.unsqueeze(1)).squeeze(1).clamp(1e-8, 1.0)
+        focal_weight = alpha[targets] * (1.0 - true_probabilities).pow(gamma)
+        return torch.mean(focal_weight * ce_loss)
+
+    return focal_loss
 
 
 def _fit_torch_sequence_predict(
@@ -636,6 +675,8 @@ def _fit_torch_sequence_predict(
         batch_size=actual_batch_size,
         shuffle=True,
     )
+    train_features = torch.from_numpy(X_train).to(device)
+    train_targets = torch.from_numpy(y_train).to(device)
     validation_features = torch.from_numpy(X_validation).to(device)
     validation_targets = torch.from_numpy(y_validation).to(device)
     evaluation_features = torch.from_numpy(X_evaluation).to(device)
@@ -648,46 +689,121 @@ def _fit_torch_sequence_predict(
     class LSTMRegressor(nn.Module):
         def __init__(self) -> None:
             super().__init__()
+
             self.lstm = nn.LSTM(
                 input_size=input_size,
                 hidden_size=hidden_size,
-                num_layers=1,
+                num_layers=2,              # deeper than 1-layer LSTM
                 batch_first=True,
-                dropout=0.0,
+                dropout=dropout,           # works only when num_layers > 1
             )
+
             self.head = nn.Sequential(
                 nn.Dropout(dropout),
-                nn.Linear(hidden_size, dense_size),
+                nn.Linear(hidden_size * 3, dense_size),   # last + mean + max pooling
                 nn.ReLU(),
+                nn.Dropout(dropout),
                 nn.Linear(dense_size, 1),
             )
 
-        def forward(self, inputs: object) -> object:
+        def forward(self, inputs: torch.Tensor) -> torch.Tensor:
+            # outputs: [batch, seq_len, hidden_size]
             outputs, _ = self.lstm(inputs)
-            return self.head(outputs[:, -1, :]).squeeze(-1)
+
+            last_feat = outputs[:, -1, :]
+            mean_feat = outputs.mean(dim=1)
+            max_feat, _ = outputs.max(dim=1)
+
+            features = torch.cat([last_feat, mean_feat, max_feat], dim=1)
+            return self.head(features).squeeze(-1)
 
     class CNNRegressor(nn.Module):
         def __init__(self) -> None:
             super().__init__()
+
             self.network = nn.Sequential(
-                nn.Conv1d(input_size, channels, kernel_size=kernel_size, padding=kernel_size // 2),
+                nn.Conv1d(
+                    in_channels=input_size,
+                    out_channels=channels,
+                    kernel_size=kernel_size,
+                    padding=kernel_size // 2,
+                ),
+                nn.BatchNorm1d(channels),
                 nn.ReLU(),
-                nn.Conv1d(channels, channels, kernel_size=kernel_size, padding=kernel_size // 2),
+                nn.Conv1d(
+                    in_channels=channels,
+                    out_channels=channels,
+                    kernel_size=kernel_size,
+                    padding=kernel_size // 2,
+                ),
+                nn.BatchNorm1d(channels),
                 nn.ReLU(),
-                nn.AdaptiveAvgPool1d(1),
             )
+            self.avg_pool = nn.AdaptiveAvgPool1d(1)
+            self.max_pool = nn.AdaptiveMaxPool1d(1)
+
             self.head = nn.Sequential(
-                nn.Flatten(),
                 nn.Dropout(dropout),
-                nn.Linear(channels, dense_size),
+                nn.Linear(channels * 2, dense_size),
                 nn.ReLU(),
+                nn.Dropout(dropout),
                 nn.Linear(dense_size, 1),
             )
 
-        def forward(self, inputs: object) -> object:
-            inputs = inputs.transpose(1, 2)
-            features = self.network(inputs)
-            return self.head(features).squeeze(-1) #Get outputs
+        def forward(self, inputs: torch.Tensor) -> torch.Tensor:
+            # inputs: [batch, seq_len, features]
+            inputs = inputs.transpose(1, 2)  # -> [batch, features, seq_len]
+            encoded = self.network(inputs)
+            avg_features = self.avg_pool(encoded).squeeze(-1)
+            max_features = self.max_pool(encoded).squeeze(-1)
+            features = torch.cat([avg_features, max_features], dim=1)
+            return self.head(features).squeeze(-1)
+
+    class CNNLSTMRegressor(nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+
+            self.temporal_cnn = nn.Sequential(
+                nn.Conv1d(
+                    in_channels=input_size,
+                    out_channels=channels,
+                    kernel_size=kernel_size,
+                    padding=kernel_size // 2,
+                ),
+                nn.ReLU(),
+                nn.Conv1d(
+                    in_channels=channels,
+                    out_channels=channels,
+                    kernel_size=kernel_size,
+                    padding=kernel_size // 2,
+                ),
+                nn.ReLU(),
+            )
+            self.lstm = nn.LSTM(
+                input_size=channels,
+                hidden_size=hidden_size,
+                num_layers=2,
+                batch_first=True,
+                dropout=dropout,
+            )
+            self.head = nn.Sequential(
+                nn.Dropout(dropout),
+                nn.Linear(hidden_size * 3, dense_size),
+                nn.ReLU(),
+                nn.Dropout(dropout),
+                nn.Linear(dense_size, 1),
+            )
+
+        def forward(self, inputs: torch.Tensor) -> torch.Tensor:
+            conv_features = self.temporal_cnn(inputs.transpose(1, 2)).transpose(1, 2)
+            outputs, _ = self.lstm(conv_features)
+
+            last_feat = outputs[:, -1, :]
+            mean_feat = outputs.mean(dim=1)
+            max_feat, _ = outputs.max(dim=1)
+
+            features = torch.cat([last_feat, mean_feat, max_feat], dim=1)
+            return self.head(features).squeeze(-1)
 
     class CTTSRegressor(nn.Module):
         def __init__(self) -> None:
@@ -752,13 +868,15 @@ def _fit_torch_sequence_predict(
         model = LSTMRegressor()
     elif model_name == "cnn":
         model = CNNRegressor()
+    elif model_name == "cnn_lstm":
+        model = CNNLSTMRegressor()
     elif model_name == "ctts":
         model = CTTSRegressor()
     else:
         raise ValueError(f"Unsupported sequence model {model_name}.")
     model = model.to(device)
 
-    if model_name == "ctts":
+    if model_name == "ctts" or weight_decay > 0.0:
         optimizer = torch.optim.AdamW(
             model.parameters(),
             lr=actual_learning_rate,
@@ -775,8 +893,9 @@ def _fit_torch_sequence_predict(
         device=device,
     )
     best_state = None
+    best_epoch = 1
     best_validation_loss = float("inf")
-    patience = 10
+    patience = 5 if model_name in {"cnn", "cnn_lstm"} else 10
     patience_left = patience
     history_rows: list[dict[str, float]] = []
 
@@ -797,25 +916,29 @@ def _fit_torch_sequence_predict(
 
         model.eval()
         with torch.no_grad():
+            train_eval_predictions = model(train_features)
+            train_eval_loss = float(loss_fn(train_eval_predictions, train_targets).item())
             validation_predictions = model(validation_features)
             validation_loss = float(loss_fn(validation_predictions, validation_targets).item())
-        train_loss = float(np.mean(batch_losses)) if batch_losses else float("nan")
+        train_batch_loss = float(np.mean(batch_losses)) if batch_losses else float("nan")
         history_rows.append(
             {
                 "epoch": float(epoch_index + 1),
-                "train_loss": train_loss,
+                "train_loss": train_eval_loss,
+                "train_batch_loss": train_batch_loss,
                 "validation_loss": validation_loss,
             }
         )
         if log_epoch_losses:
             print(
                 f"{model_name} epoch {epoch_index + 1}/{epochs} "
-                f"train_loss={train_loss:.6f} validation_loss={validation_loss:.6f}"
+                f"train_loss={train_eval_loss:.6f} validation_loss={validation_loss:.6f}"
             )
 
         if validation_loss < best_validation_loss:
             best_validation_loss = validation_loss
             best_state = {key: value.detach().clone() for key, value in model.state_dict().items()}
+            best_epoch = epoch_index + 1
             patience_left = patience
         else:
             patience_left -= 1
@@ -831,6 +954,22 @@ def _fit_torch_sequence_predict(
 
     predicted_log_vol = predicted_scaled * target_std + target_mean
     training_history = pd.DataFrame(history_rows)
+    if not training_history.empty:
+        training_history["task_type"] = "regression"
+        training_history["loss_name"] = training_loss
+        training_history["selection_metric"] = "validation_loss"
+        training_history["is_best_epoch"] = (
+            training_history["epoch"].astype(int) == int(best_epoch)
+        ).astype(int)
+    del train_loader
+    del train_features
+    del train_targets
+    del validation_features
+    del validation_targets
+    del evaluation_features
+    del model
+    del optimizer
+    _clear_torch_device_cache(torch, device)
     return predicted_log_vol.astype(float), actual_log_vol, eligible_evaluation_index, training_history
 
 
@@ -1338,6 +1477,8 @@ def _fit_torch_sequence_classifier_predict(
         batch_size=actual_batch_size,
         shuffle=True,
     )
+    train_features = torch.from_numpy(X_train).to(device)
+    train_targets = torch.from_numpy(y_train).to(device)
     validation_features = torch.from_numpy(X_validation).to(device)
     validation_targets = torch.from_numpy(y_validation).to(device)
     evaluation_features = torch.from_numpy(X_evaluation).to(device)
@@ -1353,41 +1494,99 @@ def _fit_torch_sequence_classifier_predict(
             self.lstm = nn.LSTM(
                 input_size=input_size,
                 hidden_size=hidden_size,
-                num_layers=1,
+                num_layers=2,
                 batch_first=True,
-                dropout=0.0,
+                dropout=dropout,
             )
             self.head = nn.Sequential(
                 nn.Dropout(dropout),
-                nn.Linear(hidden_size, dense_size),
+                nn.Linear(hidden_size * 3, dense_size),
                 nn.ReLU(),
+                nn.Dropout(dropout),
                 nn.Linear(dense_size, 3),
             )
 
-        def forward(self, inputs: object) -> object:
+        def forward(self, inputs: torch.Tensor) -> torch.Tensor:
             outputs, _ = self.lstm(inputs)
-            return self.head(outputs[:, -1, :])
+
+            last_feat = outputs[:, -1, :]
+            mean_feat = outputs.mean(dim=1)
+            max_feat, _ = outputs.max(dim=1)
+
+            features = torch.cat([last_feat, mean_feat, max_feat], dim=1)
+            return self.head(features)
 
     class CNNClassifier(nn.Module):
         def __init__(self) -> None:
             super().__init__()
             self.network = nn.Sequential(
                 nn.Conv1d(input_size, channels, kernel_size=kernel_size, padding=kernel_size // 2),
+                nn.BatchNorm1d(channels),
                 nn.ReLU(),
                 nn.Conv1d(channels, channels, kernel_size=kernel_size, padding=kernel_size // 2),
+                nn.BatchNorm1d(channels),
                 nn.ReLU(),
-                nn.AdaptiveAvgPool1d(1),
             )
+            self.avg_pool = nn.AdaptiveAvgPool1d(1)
+            self.max_pool = nn.AdaptiveMaxPool1d(1)
             self.head = nn.Sequential(
-                nn.Flatten(),
                 nn.Dropout(dropout),
-                nn.Linear(channels, dense_size),
+                nn.Linear(channels * 2, dense_size),
                 nn.ReLU(),
+                nn.Dropout(dropout),
                 nn.Linear(dense_size, 3),
             )
 
-        def forward(self, inputs: object) -> object:
-            features = self.network(inputs.transpose(1, 2))
+        def forward(self, inputs: torch.Tensor) -> torch.Tensor:
+            encoded = self.network(inputs.transpose(1, 2))
+            avg_features = self.avg_pool(encoded).squeeze(-1)
+            max_features = self.max_pool(encoded).squeeze(-1)
+            features = torch.cat([avg_features, max_features], dim=1)
+            return self.head(features)
+
+    class CNNLSTMClassifier(nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.temporal_cnn = nn.Sequential(
+                nn.Conv1d(
+                    input_size,
+                    channels,
+                    kernel_size=kernel_size,
+                    padding=kernel_size // 2,
+                ),
+                nn.ReLU(),
+                nn.Conv1d(
+                    channels,
+                    channels,
+                    kernel_size=kernel_size,
+                    padding=kernel_size // 2,
+                ),
+                nn.ReLU(),
+            )
+            self.lstm = nn.LSTM(
+                input_size=channels,
+                hidden_size=hidden_size,
+                num_layers=2,
+                batch_first=True,
+                dropout=dropout,
+            )
+            self.head = nn.Sequential(
+                nn.Dropout(dropout),
+                nn.Linear(hidden_size * 3, dense_size),
+                nn.ReLU(),
+                nn.Dropout(dropout),
+                nn.Linear(dense_size, 3),
+            )
+
+        def forward(self, inputs: torch.Tensor) -> torch.Tensor:
+            conv_features = self.temporal_cnn(inputs.transpose(1, 2)).transpose(1, 2)
+            outputs, _ = self.lstm(conv_features)
+
+            last_feat = outputs[:, -1, :]
+            mean_feat = outputs.mean(dim=1)
+            max_feat, _ = outputs.max(dim=1)
+
+            features = torch.cat([last_feat, mean_feat, max_feat], dim=1)
             return self.head(features)
 
     class CTTSClassifier(nn.Module):
@@ -1445,13 +1644,15 @@ def _fit_torch_sequence_classifier_predict(
         model = LSTMClassifier()
     elif model_name == "cnn":
         model = CNNClassifier()
+    elif model_name == "cnn_lstm":
+        model = CNNLSTMClassifier()
     elif model_name == "ctts":
         model = CTTSClassifier()
     else:
         raise ValueError(f"Unsupported sequence model {model_name}.")
     model = model.to(device)
 
-    if model_name == "ctts":
+    if model_name == "ctts" or weight_decay > 0.0:
         optimizer = torch.optim.AdamW(
             model.parameters(),
             lr=actual_learning_rate,
@@ -1459,10 +1660,16 @@ def _fit_torch_sequence_classifier_predict(
         )
     else:
         optimizer = torch.optim.Adam(model.parameters(), lr=actual_learning_rate)
-    loss_fn = nn.CrossEntropyLoss()
+    loss_fn = _build_sequence_classification_loss(
+        nn=nn,
+        torch=torch,
+        class_targets=train_targets,
+        device=device,
+    )
     best_state = None
+    best_epoch = 1
     best_validation_score = float("-inf")
-    patience = 10
+    patience = 5 if model_name in {"cnn", "cnn_lstm"} else 10
     patience_left = patience
     history_rows: list[dict[str, float]] = []
 
@@ -1483,32 +1690,43 @@ def _fit_torch_sequence_classifier_predict(
 
         model.eval()
         with torch.no_grad():
+            train_logits = model(train_features)
+            train_ce_loss = float(loss_fn(train_logits, train_targets).item())
+            train_predictions = torch.argmax(train_logits, dim=1).cpu().numpy()
             validation_logits = model(validation_features)
             validation_ce_loss = float(loss_fn(validation_logits, validation_targets).item())
             validation_predictions = torch.argmax(validation_logits, dim=1).cpu().numpy()
+        train_score = _classification_score(
+            train_targets.cpu().numpy(),
+            train_predictions,
+            metric,
+        )
         validation_score = _classification_score(
             validation_targets.cpu().numpy(),
             validation_predictions,
             metric,
         )
-        train_loss = float(np.mean(batch_losses)) if batch_losses else float("nan")
+        train_batch_loss = float(np.mean(batch_losses)) if batch_losses else float("nan")
         history_rows.append(
             {
                 "epoch": float(epoch_index + 1),
-                "train_loss": train_loss,
+                "train_loss": train_ce_loss,
+                "train_batch_loss": train_batch_loss,
                 "validation_loss": validation_ce_loss,
+                "train_score": train_score,
                 "validation_score": validation_score,
             }
         )
         if log_epoch_losses:
             print(
                 f"{model_name} epoch {epoch_index + 1}/{epochs} "
-                f"train_loss={train_loss:.6f} validation_loss={validation_ce_loss:.6f} "
+                f"train_loss={train_ce_loss:.6f} validation_loss={validation_ce_loss:.6f} "
                 f"validation_score={validation_score:.6f}"
             )
         if validation_score > best_validation_score:
             best_validation_score = validation_score
             best_state = {key: value.detach().clone() for key, value in model.state_dict().items()}
+            best_epoch = epoch_index + 1
             patience_left = patience
         else:
             patience_left -= 1
@@ -1524,6 +1742,22 @@ def _fit_torch_sequence_classifier_predict(
         class_probabilities = torch.softmax(evaluation_logits, dim=1).cpu().numpy()
     predicted_class = np.asarray(np.argmax(class_probabilities, axis=1), dtype=int)
     training_history = pd.DataFrame(history_rows)
+    if not training_history.empty:
+        training_history["task_type"] = "classification"
+        training_history["loss_name"] = "cross_entropy"
+        training_history["selection_metric"] = metric
+        training_history["is_best_epoch"] = (
+            training_history["epoch"].astype(int) == int(best_epoch)
+        ).astype(int)
+    del train_loader
+    del train_features
+    del train_targets
+    del validation_features
+    del validation_targets
+    del evaluation_features
+    del model
+    del optimizer
+    _clear_torch_device_cache(torch, device)
     return (
         predicted_class,
         actual_class,

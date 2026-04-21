@@ -24,10 +24,11 @@ MODEL_LABELS = {
     "xgboost": "XGBoost",
     "lstm": "LSTM",
     "cnn": "1D CNN",
+    "cnn_lstm": "CNN+LSTM",
     "ctts": "CTTS",
 }
 
-MODEL_ORDER = ["naive", "elastic_net", "xgboost", "lstm", "cnn", "ctts"]
+MODEL_ORDER = ["naive", "elastic_net", "xgboost", "lstm", "cnn", "cnn_lstm", "ctts"]
 CLASS_LABELS = {
     0: "Low Vol",
     1: "Mid Vol",
@@ -271,36 +272,137 @@ def plot_training_curve(
     model_label: str,
 ) -> None:
     plt, _ = _prepare_matplotlib()
-    df = pd.read_csv(training_history_path).sort_values("epoch").reset_index(drop=True)
+    df = pd.read_csv(training_history_path)
+    if "block_id" not in df.columns:
+        df["block_id"] = 0
+    if "train_batch_loss" not in df.columns:
+        df["train_batch_loss"] = df["train_loss"]
+    if "train_score" not in df.columns and "validation_score" in df.columns:
+        df["train_score"] = np.nan
+    df = df.sort_values(["block_id", "epoch"]).reset_index(drop=True)
 
-    fig, ax = plt.subplots(figsize=(8.5, 5.0))
-    ax.plot(df["epoch"], df["train_loss"], label="Train loss", linewidth=2.0, color="#1d4ed8")
-    ax.plot(
-        df["epoch"],
-        df["validation_loss"],
+    metric_label = "Validation score"
+    if "selection_metric" in df.columns:
+        selection_metric = str(df["selection_metric"].iloc[0])
+        metric_label = selection_metric.replace("_", " ").title()
+
+    aggregate_columns = ["train_loss", "validation_loss", "train_batch_loss"]
+    if "validation_score" in df.columns:
+        aggregate_columns.extend(["train_score", "validation_score"])
+    stats = df.groupby("epoch")[aggregate_columns].agg(["mean", "std"]).reset_index()
+
+    flattened_columns = ["epoch"]
+    for column in aggregate_columns:
+        flattened_columns.extend([f"{column}_mean", f"{column}_std"])
+    stats.columns = flattened_columns
+
+    block_count = int(df["block_id"].nunique())
+    if "is_best_epoch" in df.columns:
+        best_epochs = df.loc[df["is_best_epoch"] == 1, "epoch"].to_numpy(dtype=float)
+    else:
+        best_epochs = np.array([], dtype=float)
+
+    fig, (ax_loss, ax_score) = plt.subplots(
+        2,
+        1,
+        figsize=(9.0, 7.2),
+        sharex=True,
+        gridspec_kw={"height_ratios": [3, 2]},
+    )
+    ax_loss.plot(
+        stats["epoch"],
+        stats["train_loss_mean"],
+        label="Train loss (eval mode)",
+        linewidth=2.0,
+        color="#1d4ed8",
+    )
+    ax_loss.fill_between(
+        stats["epoch"],
+        stats["train_loss_mean"] - stats["train_loss_std"].fillna(0.0),
+        stats["train_loss_mean"] + stats["train_loss_std"].fillna(0.0),
+        color="#1d4ed8",
+        alpha=0.12,
+    )
+    ax_loss.plot(
+        stats["epoch"],
+        stats["validation_loss_mean"],
         label="Validation loss",
         linewidth=2.0,
         color="#b45309",
     )
+    ax_loss.fill_between(
+        stats["epoch"],
+        stats["validation_loss_mean"] - stats["validation_loss_std"].fillna(0.0),
+        stats["validation_loss_mean"] + stats["validation_loss_std"].fillna(0.0),
+        color="#b45309",
+        alpha=0.12,
+    )
+    ax_loss.plot(
+        stats["epoch"],
+        stats["train_batch_loss_mean"],
+        label="Train batch loss",
+        linewidth=1.4,
+        color="#6b7280",
+        linestyle=":",
+    )
+    ax_loss.set_ylabel("Cross-entropy loss")
+    ax_loss.legend(frameon=True, loc="upper right")
+
     if "validation_score" in df.columns:
-        ax2 = ax.twinx()
-        ax2.plot(
-            df["epoch"],
-            df["validation_score"],
-            label="Validation score",
-            linewidth=1.8,
+        if "train_score_mean" in stats.columns:
+            ax_score.plot(
+                stats["epoch"],
+                stats["train_score_mean"],
+                label=f"Train {metric_label}",
+                linewidth=1.6,
+                color="#94a3b8",
+            )
+        ax_score.plot(
+            stats["epoch"],
+            stats["validation_score_mean"],
+            label=f"Validation {metric_label}",
+            linewidth=2.0,
             color="#059669",
-            linestyle="--",
         )
-        ax2.set_ylabel("Validation score")
-        lines, labels = ax.get_legend_handles_labels()
-        lines2, labels2 = ax2.get_legend_handles_labels()
-        ax.legend(lines + lines2, labels + labels2, frameon=True)
-    else:
-        ax.legend(frameon=True)
-    ax.set_title(f"Training Curve: {model_label}")
-    ax.set_xlabel("Epoch")
-    ax.set_ylabel("Loss")
+        ax_score.fill_between(
+            stats["epoch"],
+            stats["validation_score_mean"] - stats["validation_score_std"].fillna(0.0),
+            stats["validation_score_mean"] + stats["validation_score_std"].fillna(0.0),
+            color="#059669",
+            alpha=0.12,
+        )
+        ax_score.set_ylabel(metric_label)
+        ax_score.legend(frameon=True, loc="best")
+
+    if len(best_epochs) > 0:
+        best_epoch_center = float(np.median(best_epochs))
+        for axis in (ax_loss, ax_score):
+            axis.axvline(
+                best_epoch_center,
+                color="#7c3aed",
+                linewidth=1.6,
+                linestyle="--",
+            )
+            if block_count > 1:
+                axis.axvspan(
+                    float(np.min(best_epochs)),
+                    float(np.max(best_epochs)),
+                    color="#7c3aed",
+                    alpha=0.08,
+                )
+
+    ax_loss.set_title(f"Training Curve: {model_label} ({block_count} block{'s' if block_count != 1 else ''})")
+    ax_score.set_xlabel("Epoch")
+    ax_score.text(
+        0.99,
+        0.02,
+        "Early stopping uses validation score; bands show +/-1 std across blocks.",
+        transform=ax_score.transAxes,
+        ha="right",
+        va="bottom",
+        fontsize=9,
+        color="#4b5563",
+    )
     fig.tight_layout()
 
     output = Path(output_path)

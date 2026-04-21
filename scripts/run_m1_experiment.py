@@ -46,7 +46,7 @@ from pipeline.models import (
 
 DEFAULT_INPUT = "data/processed/m1/m1_dataset.csv"
 DEFAULT_OUTPUT_DIR = "artifacts/m1"
-SUPPORTED_MODELS = ("naive", "elastic_net", "xgboost", "lstm", "cnn", "ctts")
+SUPPORTED_MODELS = ("naive", "elastic_net", "xgboost", "lstm", "cnn", "cnn_lstm", "ctts")
 
 
 def _load_dataset(path: str) -> pd.DataFrame:
@@ -97,6 +97,7 @@ def _find_missing_dependencies(model_names: list[str]) -> dict[str, list[str]]:
         "xgboost": ["xgboost"],
         "lstm": ["torch"],
         "cnn": ["torch"],
+        "cnn_lstm": ["torch"],
         "ctts": ["torch"],
     }
     missing_by_model: dict[str, list[str]] = {}
@@ -257,27 +258,30 @@ def _build_parameter_grid(
 
     if model_name == "cnn":
         default_params = {
-            "lookback_window": args.lookback_window,
+            "lookback_window": 80,
             "channels": 32,
-            "kernel_size": 3,
+            "kernel_size": 5,
             "dense_size": 16,
-            "dropout": 0.0,
+            "dropout": 0.1,
             "learning_rate": args.torch_learning_rate,
+            "weight_decay": 1e-4,
         }
         if args.tuning_mode == "off":
             return [default_params]
         if args.tuning_mode == "full":
             channels = [16, 32, 48]
-            kernel_sizes = [3, 5]
-            dropouts = [0.0, 0.1]
+            kernel_sizes = [5]
+            dropouts = [0.0, 0.1, 0.2]
+            weight_decays = [0.0, 1e-4, 5e-4]
             learning_rates = _unique_preserve_order([5e-4, args.torch_learning_rate, 2e-3])
-            lookbacks = _unique_preserve_order([40, args.lookback_window, 80])
+            lookbacks = [80]
         else:
             channels = [16, 32]
-            kernel_sizes = [3, 5]
-            dropouts = [0.0, 0.1]
+            kernel_sizes = [5]
+            dropouts = [0.0, 0.1, 0.2]
+            weight_decays = [0.0, 1e-4]
             learning_rates = _unique_preserve_order([5e-4, args.torch_learning_rate])
-            lookbacks = [args.lookback_window]
+            lookbacks = [80]
         return [
             {
                 "lookback_window": lookback_window,
@@ -286,13 +290,66 @@ def _build_parameter_grid(
                 "dense_size": 16,
                 "dropout": dropout,
                 "learning_rate": learning_rate,
+                "weight_decay": weight_decay,
             }
-            for lookback_window, channel_count, kernel_size, dropout, learning_rate in product(
+            for lookback_window, channel_count, kernel_size, dropout, learning_rate, weight_decay in product(
                 lookbacks,
                 channels,
                 kernel_sizes,
                 dropouts,
                 learning_rates,
+                weight_decays,
+            )
+        ]
+
+    if model_name == "cnn_lstm":
+        default_params = {
+            "lookback_window": 80,
+            "channels": 32,
+            "hidden_size": 32,
+            "kernel_size": 5,
+            "dense_size": 16,
+            "dropout": 0.1,
+            "learning_rate": args.torch_learning_rate,
+            "weight_decay": 1e-4,
+        }
+        if args.tuning_mode == "off":
+            return [default_params]
+        if args.tuning_mode == "full":
+            channels = [16, 32, 48]
+            hidden_sizes = [16, 32, 48]
+            kernel_sizes = [5]
+            dropouts = [0.0, 0.1, 0.2]
+            weight_decays = [0.0, 1e-4, 5e-4]
+            learning_rates = _unique_preserve_order([5e-4, args.torch_learning_rate, 2e-3])
+            lookbacks = [80]
+        else:
+            channels = [16, 32]
+            hidden_sizes = [16, 32]
+            kernel_sizes = [5]
+            dropouts = [0.0, 0.1, 0.2]
+            weight_decays = [0.0, 1e-4]
+            learning_rates = _unique_preserve_order([5e-4, args.torch_learning_rate])
+            lookbacks = [80]
+        return [
+            {
+                "lookback_window": lookback_window,
+                "channels": channel_count,
+                "hidden_size": hidden_size,
+                "kernel_size": kernel_size,
+                "dense_size": 16,
+                "dropout": dropout,
+                "learning_rate": learning_rate,
+                "weight_decay": weight_decay,
+            }
+            for lookback_window, channel_count, hidden_size, kernel_size, dropout, learning_rate, weight_decay in product(
+                lookbacks,
+                channels,
+                hidden_sizes,
+                kernel_sizes,
+                dropouts,
+                learning_rates,
+                weight_decays,
             )
         ]
 
@@ -413,7 +470,7 @@ def _tune_model(
                 parameter_grid=parameter_grid,
                 metric=args.tuning_metric,
             )
-        elif model_name in {"lstm", "cnn", "ctts"}:
+        elif model_name in {"lstm", "cnn", "cnn_lstm", "ctts"}:
             selected_params, summary = tune_torch_sequence_classification_model(
                 model_name=model_name,
                 df=df,
@@ -460,7 +517,7 @@ def _tune_model(
             parameter_grid=parameter_grid,
             metric=args.tuning_metric,
         )
-    elif model_name in {"lstm", "cnn", "ctts"}:
+    elif model_name in {"lstm", "cnn", "cnn_lstm", "ctts"}:
         selected_params, summary = tune_torch_sequence_model(
             model_name=model_name,
             df=df,
@@ -644,7 +701,17 @@ def _run_models_isolated(
             model_name=model_name,
             worker_output_dir=worker_output_dir,
         )
-        subprocess.run(command, check=True, cwd=str(ROOT))
+        try:
+            subprocess.run(command, check=True, cwd=str(ROOT))
+        except subprocess.CalledProcessError as exc:
+            if exc.returncode == -9 or exc.returncode == 137:
+                raise SystemExit(
+                    "A worker process was killed by the OS, which usually indicates memory pressure. "
+                    f"The failing model was `{model_name}`. If this is a torch model running with "
+                    f"`--torch-device {args.torch_device}`, rerun it with `--torch-device cpu` or reduce "
+                    "the model/training budget.",
+                ) from exc
+            raise
 
         for artifact_name in [
             f"predictions_{model_name}.csv",
@@ -700,7 +767,7 @@ def _run_single_model(
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     prediction_frames: list[pd.DataFrame] = []
     explainability_frames: list[pd.DataFrame] = []
-    training_history_output = pd.DataFrame()
+    training_history_frames: list[pd.DataFrame] = []
 
     block_iterator = tqdm(
         blocks,
@@ -740,7 +807,7 @@ def _run_single_model(
                 source_column=args.classification_source_column,
                 model_params=selected_params,
             )
-        elif args.task_type == "classification" and model_name in {"lstm", "cnn", "ctts"}:
+        elif args.task_type == "classification" and model_name in {"lstm", "cnn", "cnn_lstm", "ctts"}:
             block_prediction = run_torch_sequence_classification_block(
                 model_name=model_name,
                 df=df,
@@ -783,7 +850,7 @@ def _run_single_model(
                 target_column=target_column,
                 model_params=selected_params,
             )
-        elif model_name in {"lstm", "cnn", "ctts"}:
+        elif model_name in {"lstm", "cnn", "cnn_lstm", "ctts"}:
             block_prediction = run_torch_sequence_block(
                 model_name=model_name,
                 df=df,
@@ -842,9 +909,10 @@ def _run_single_model(
             explainability = block_prediction.explainability.copy()
             explainability["block_id"] = block.block_id
             explainability_frames.append(explainability)
-        if training_history_output.empty and block_prediction.training_history is not None:
-            training_history_output = block_prediction.training_history.copy()
-            training_history_output["block_id"] = block.block_id
+        if block_prediction.training_history is not None:
+            training_history = block_prediction.training_history.copy()
+            training_history["block_id"] = block.block_id
+            training_history_frames.append(training_history)
 
         if progress_enabled:
             block_iterator.set_postfix_str(
@@ -853,6 +921,10 @@ def _run_single_model(
 
     predictions = pd.concat(prediction_frames, ignore_index=True).sort_values("date").reset_index(drop=True)
     explainability_output = _aggregate_explainability(explainability_frames)
+    if training_history_frames:
+        training_history_output = pd.concat(training_history_frames, ignore_index=True)
+    else:
+        training_history_output = pd.DataFrame()
     return predictions, explainability_output, training_history_output
 
 
@@ -941,7 +1013,7 @@ def main() -> None:
     parser.add_argument(
         "--torch-epochs",
         type=int,
-        default=30,
+        default=40,
         help="Maximum training epochs for the sequence models.",
     )
     parser.add_argument(
@@ -1147,8 +1219,8 @@ def main() -> None:
             "classification_source_column": args.classification_source_column,
             "test_start_date": args.test_start_date,
             "selected_params": selected_params,
-            "torch_loss": args.torch_loss if model_name in {"lstm", "cnn", "ctts"} else None,
-            "torch_device": args.torch_device if model_name in {"lstm", "cnn", "ctts"} else None,
+            "torch_loss": args.torch_loss if model_name in {"lstm", "cnn", "cnn_lstm", "ctts"} else None,
+            "torch_device": args.torch_device if model_name in {"lstm", "cnn", "cnn_lstm", "ctts"} else None,
             "metrics": metric_summary,
             "backtest": backtest_summary,
             "artifacts": {

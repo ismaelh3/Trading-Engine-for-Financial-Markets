@@ -9,6 +9,7 @@ import os
 import sys
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 
@@ -23,10 +24,11 @@ MODEL_LABELS = {
     "xgboost": "XGBoost",
     "lstm": "LSTM",
     "cnn": "1D CNN",
+    "cnn_lstm": "CNN+LSTM",
     "ctts": "CTTS",
 }
 
-MODEL_ORDER = ["naive", "elastic_net", "xgboost", "lstm", "cnn", "ctts"]
+MODEL_ORDER = ["naive", "elastic_net", "xgboost", "lstm", "cnn", "cnn_lstm", "ctts"]
 
 
 def _prepare_matplotlib() -> tuple:
@@ -202,21 +204,105 @@ def plot_training_curve(
     model_label: str,
 ) -> None:
     plt, _ = _prepare_matplotlib()
-    df = pd.read_csv(training_history_path).sort_values("epoch").reset_index(drop=True)
+    df = pd.read_csv(training_history_path)
+    if "block_id" not in df.columns:
+        df["block_id"] = 0
+    if "train_batch_loss" not in df.columns:
+        df["train_batch_loss"] = df["train_loss"]
+    df = df.sort_values(["block_id", "epoch"]).reset_index(drop=True)
 
-    fig, ax = plt.subplots(figsize=(8.5, 5.0))
-    ax.plot(df["epoch"], df["train_loss"], label="Train loss", linewidth=2.0, color="#1d4ed8")
+    stats = df.groupby("epoch")[["train_loss", "validation_loss", "train_batch_loss"]].agg(["mean", "std"]).reset_index()
+    stats.columns = [
+        "epoch",
+        "train_loss_mean",
+        "train_loss_std",
+        "validation_loss_mean",
+        "validation_loss_std",
+        "train_batch_loss_mean",
+        "train_batch_loss_std",
+    ]
+    block_count = int(df["block_id"].nunique())
+    if "is_best_epoch" in df.columns:
+        best_epochs = df.loc[df["is_best_epoch"] == 1, "epoch"].to_numpy(dtype=float)
+    else:
+        best_epochs = np.array([], dtype=float)
+    loss_name = str(df["loss_name"].iloc[0]) if "loss_name" in df.columns else "loss"
+
+    fig, ax = plt.subplots(figsize=(9.0, 5.4))
     ax.plot(
-        df["epoch"],
-        df["validation_loss"],
+        stats["epoch"],
+        stats["train_loss_mean"],
+        label="Train loss (eval mode)",
+        linewidth=2.0,
+        color="#1d4ed8",
+    )
+    ax.fill_between(
+        stats["epoch"],
+        stats["train_loss_mean"] - stats["train_loss_std"].fillna(0.0),
+        stats["train_loss_mean"] + stats["train_loss_std"].fillna(0.0),
+        color="#1d4ed8",
+        alpha=0.12,
+    )
+    ax.plot(
+        stats["epoch"],
+        stats["validation_loss_mean"],
         label="Validation loss",
         linewidth=2.0,
         color="#b45309",
     )
-    ax.set_title(f"Training Curve: {model_label}")
+    ax.fill_between(
+        stats["epoch"],
+        stats["validation_loss_mean"] - stats["validation_loss_std"].fillna(0.0),
+        stats["validation_loss_mean"] + stats["validation_loss_std"].fillna(0.0),
+        color="#b45309",
+        alpha=0.12,
+    )
+    if "train_batch_loss" in df.columns:
+        ax.plot(
+            stats["epoch"],
+            stats["train_batch_loss_mean"],
+            label="Train batch loss",
+            linewidth=1.4,
+            color="#6b7280",
+            linestyle=":",
+        )
+    if len(best_epochs) > 0:
+        best_epoch_center = float(np.median(best_epochs))
+        ax.axvline(
+            best_epoch_center,
+            color="#059669",
+            linewidth=1.6,
+            linestyle="--",
+            label="Median best epoch",
+        )
+        if block_count > 1:
+            ax.axvspan(
+                float(np.min(best_epochs)),
+                float(np.max(best_epochs)),
+                color="#059669",
+                alpha=0.08,
+            )
+    ylabel = "Loss"
+    if loss_name == "qlike":
+        ylabel = "QLIKE loss (lower is better)"
+    elif loss_name == "huber":
+        ylabel = "Huber loss"
+    elif loss_name == "mse":
+        ylabel = "MSE loss"
+    ax.set_title(f"Training Curve: {model_label} ({block_count} block{'s' if block_count != 1 else ''})")
     ax.set_xlabel("Epoch")
-    ax.set_ylabel("Loss")
+    ax.set_ylabel(ylabel)
     ax.legend(frameon=True)
+    ax.text(
+        0.99,
+        0.02,
+        "Shaded bands show +/-1 std across walk-forward blocks.",
+        transform=ax.transAxes,
+        ha="right",
+        va="bottom",
+        fontsize=9,
+        color="#4b5563",
+    )
     fig.tight_layout()
 
     output = Path(output_path)
