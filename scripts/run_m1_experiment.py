@@ -493,6 +493,21 @@ def _append_optional_argument(command: list[str], flag: str, value: object | Non
     command.extend([flag, str(value)])
 
 
+def _path_has_task_namespace(path: Path, task_type: str) -> bool:
+    normalized_task_type = task_type.lower()
+    parts = [part.lower() for part in path.parts]
+    if normalized_task_type in parts:
+        return True
+    return normalized_task_type in path.name.lower()
+
+
+def _resolve_task_scoped_path(path_value: str, task_type: str) -> Path:
+    path = Path(path_value)
+    if _path_has_task_namespace(path, task_type):
+        return path
+    return path / task_type
+
+
 def _build_worker_command(
     script_path: Path,
     args: argparse.Namespace,
@@ -1006,6 +1021,11 @@ def main() -> None:
     if args.task_type == "classification" and args.tuning_metric in {"qlike", "mae", "rmse"}:
         raise SystemExit("Regression metrics are only valid with `--task-type regression`.")
 
+    resolved_output_dir = _resolve_task_scoped_path(args.output_dir, args.task_type)
+    resolved_results_root = _resolve_task_scoped_path(args.results_root, args.task_type)
+    args.output_dir = str(resolved_output_dir)
+    args.results_root = str(resolved_results_root)
+
     if not args.worker_mode and len(args.models) > 1:
         _run_models_isolated(
             script_path=Path(__file__).resolve(),
@@ -1035,6 +1055,10 @@ def main() -> None:
             f"loaded dataset rows={len(df)} features={len(feature_columns)} "
             f"date range={df['date'].min().date()}->{df['date'].max().date()}"
         ),
+        progress_enabled=progress_enabled,
+    )
+    _log_message(
+        f"task-scoped output_dir={output_dir} results_root={results_root}",
         progress_enabled=progress_enabled,
     )
     _log_message(

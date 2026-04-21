@@ -163,8 +163,15 @@ python scripts/run_m1_experiment.py \
 
 Each experiment writes:
 
-- CSV artifacts under `--output-dir`
-- per-model JSON summaries under `--results-root/<model>/results.json`
+- CSV artifacts under a task-scoped output directory
+- per-model JSON summaries under a task-scoped results directory
+
+If the path you pass does not already include `regression` or `classification`, the runner appends the task type automatically. For example:
+
+- `--output-dir artifacts/m1 --task-type regression` writes to `artifacts/m1/regression`
+- `--output-dir artifacts/m1 --task-type classification` writes to `artifacts/m1/classification`
+- `--results-root results --task-type regression` writes to `results/regression`
+- `--results-root results --task-type classification` writes to `results/classification`
 
 Typical artifact files:
 
@@ -186,12 +193,12 @@ Classification prediction files contain:
 
 ## Important Recommendation
 
-Use separate results roots for regression and classification:
+The runner now namespaces both `--output-dir` and `--results-root` by task type automatically when needed. You can still pass explicit task-scoped paths yourself if you want full control:
 
 - `results/regression`
 - `results/classification`
-
-If you reuse the same `results/` folder for both tasks, the latest run for a model can overwrite `results/<model>/results.json`, which can confuse the plotting scripts.
+- `artifacts/m1/regression`
+- `artifacts/m1/classification`
 
 ## Plot Regression Results
 

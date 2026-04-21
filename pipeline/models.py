@@ -687,7 +687,7 @@ def _fit_torch_sequence_predict(
         def forward(self, inputs: object) -> object:
             inputs = inputs.transpose(1, 2)
             features = self.network(inputs)
-            return self.head(features).squeeze(-1)
+            return self.head(features).squeeze(-1) #Get outputs
 
     class CTTSRegressor(nn.Module):
         def __init__(self) -> None:
