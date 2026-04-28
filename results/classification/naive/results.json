@@ -1,0 +1,42 @@
+{
+  "model": "naive",
+  "input": "data/processed/m1/m1_dataset.csv",
+  "target_column": "target_log_future_vol_20d",
+  "task_type": "classification",
+  "classification_source_column": "target_future_vol_20d",
+  "test_start_date": "2022-01-03",
+  "selected_params": {
+    "current_vol_feature": "feat_realized_vol_5d"
+  },
+  "torch_loss": null,
+  "torch_device": null,
+  "metrics": {
+    "accuracy": 0.5086872586872587,
+    "balanced_accuracy": 0.5310575019483835,
+    "macro_f1": 0.5150302737104884,
+    "n_predictions": 1036.0,
+    "model": "naive"
+  },
+  "backtest": {
+    "strategy_annualized_return": 0.08969326099480268,
+    "strategy_annualized_volatility": 0.08398696201399014,
+    "strategy_sharpe_ratio": 1.067942676386628,
+    "strategy_max_drawdown": -0.08551050169238128,
+    "strategy_average_weight": 0.5260617760617761,
+    "strategy_turnover_total": 61.5,
+    "benchmark_annualized_return": 0.10783972032943678,
+    "benchmark_annualized_volatility": 0.1782841709271297,
+    "benchmark_sharpe_ratio": 0.6048754624072277,
+    "benchmark_max_drawdown": -0.24496408139383452,
+    "observations": 1036.0,
+    "model": "naive"
+  },
+  "artifacts": {
+    "predictions_csv": "artifacts/m1_classification/_model_runs/naive/classification/predictions_naive.csv",
+    "backtest_csv": "artifacts/m1_classification/_model_runs/naive/classification/backtest_naive.csv",
+    "tuning_summary_csv": "artifacts/m1_classification/_model_runs/naive/classification/tuning_summary_naive.csv",
+    "selected_params_json": "artifacts/m1_classification/_model_runs/naive/classification/selected_params_naive.json",
+    "training_history_csv": null,
+    "explainability_csv": null
+  }
+}

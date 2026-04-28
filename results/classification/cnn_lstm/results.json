@@ -1,0 +1,49 @@
+{
+  "model": "cnn_lstm",
+  "input": "data/processed/m1/m1_dataset.csv",
+  "target_column": "target_log_future_vol_20d",
+  "task_type": "classification",
+  "classification_source_column": "target_future_vol_20d",
+  "test_start_date": "2022-01-03",
+  "selected_params": {
+    "lookback_window": 80,
+    "channels": 16,
+    "hidden_size": 16,
+    "kernel_size": 5,
+    "dense_size": 16,
+    "dropout": 0.2,
+    "learning_rate": 0.0005,
+    "weight_decay": 0.0001
+  },
+  "torch_loss": "qlike",
+  "torch_device": "auto",
+  "metrics": {
+    "accuracy": 0.48166023166023164,
+    "balanced_accuracy": 0.4775780153234444,
+    "macro_f1": 0.4855365915765613,
+    "n_predictions": 1036.0,
+    "model": "cnn_lstm"
+  },
+  "backtest": {
+    "strategy_annualized_return": 0.02011079241313185,
+    "strategy_annualized_volatility": 0.0861863682768213,
+    "strategy_sharpe_ratio": 0.23334075695750583,
+    "strategy_max_drawdown": -0.13741333842214698,
+    "strategy_average_weight": 0.5043436293436293,
+    "strategy_turnover_total": 21.0,
+    "benchmark_annualized_return": 0.10783972032943678,
+    "benchmark_annualized_volatility": 0.1782841709271297,
+    "benchmark_sharpe_ratio": 0.6048754624072277,
+    "benchmark_max_drawdown": -0.24496408139383452,
+    "observations": 1036.0,
+    "model": "cnn_lstm"
+  },
+  "artifacts": {
+    "predictions_csv": "artifacts/m1_classification/_model_runs/cnn_lstm/classification/predictions_cnn_lstm.csv",
+    "backtest_csv": "artifacts/m1_classification/_model_runs/cnn_lstm/classification/backtest_cnn_lstm.csv",
+    "tuning_summary_csv": "artifacts/m1_classification/_model_runs/cnn_lstm/classification/tuning_summary_cnn_lstm.csv",
+    "selected_params_json": "artifacts/m1_classification/_model_runs/cnn_lstm/classification/selected_params_cnn_lstm.json",
+    "training_history_csv": "artifacts/m1_classification/_model_runs/cnn_lstm/classification/training_history_cnn_lstm.csv",
+    "explainability_csv": null
+  }
+}

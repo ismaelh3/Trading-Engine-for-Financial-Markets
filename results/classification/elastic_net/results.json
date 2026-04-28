@@ -1,0 +1,43 @@
+{
+  "model": "elastic_net",
+  "input": "data/processed/m1/m1_dataset.csv",
+  "target_column": "target_log_future_vol_20d",
+  "task_type": "classification",
+  "classification_source_column": "target_future_vol_20d",
+  "test_start_date": "2022-01-03",
+  "selected_params": {
+    "alpha": 0.0003,
+    "l1_ratio": 0.1
+  },
+  "torch_loss": null,
+  "torch_device": null,
+  "metrics": {
+    "accuracy": 0.6052123552123552,
+    "balanced_accuracy": 0.6293325501407486,
+    "macro_f1": 0.6063428579978655,
+    "n_predictions": 1036.0,
+    "model": "elastic_net"
+  },
+  "backtest": {
+    "strategy_annualized_return": 0.02381633721871279,
+    "strategy_annualized_volatility": 0.07521824723228886,
+    "strategy_sharpe_ratio": 0.31662978193526925,
+    "strategy_max_drawdown": -0.13263695581576984,
+    "strategy_average_weight": 0.4922779922779923,
+    "strategy_turnover_total": 32.5,
+    "benchmark_annualized_return": 0.10783972032943678,
+    "benchmark_annualized_volatility": 0.1782841709271297,
+    "benchmark_sharpe_ratio": 0.6048754624072277,
+    "benchmark_max_drawdown": -0.24496408139383452,
+    "observations": 1036.0,
+    "model": "elastic_net"
+  },
+  "artifacts": {
+    "predictions_csv": "artifacts/m1_classification/_model_runs/elastic_net/classification/predictions_elastic_net.csv",
+    "backtest_csv": "artifacts/m1_classification/_model_runs/elastic_net/classification/backtest_elastic_net.csv",
+    "tuning_summary_csv": "artifacts/m1_classification/_model_runs/elastic_net/classification/tuning_summary_elastic_net.csv",
+    "selected_params_json": "artifacts/m1_classification/_model_runs/elastic_net/classification/selected_params_elastic_net.json",
+    "training_history_csv": null,
+    "explainability_csv": "artifacts/m1_classification/_model_runs/elastic_net/classification/explainability_elastic_net.csv"
+  }
+}
