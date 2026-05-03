@@ -42,6 +42,13 @@ from pipeline.models import (
     tune_xgboost_model,
     tune_xgboost_classification_model,
 )
+from pipeline.tuning import (
+    GRID_MODELS,
+    SEQUENCE_MODELS,
+    TuningResult,
+    resolve_tuning_backend,
+    tune_sequence_model_with_optuna,
+)
 
 
 DEFAULT_INPUT = "data/processed/m1/m1_dataset.csv"
@@ -91,7 +98,7 @@ def _model_results_dir(results_root: Path, model_name: str) -> Path:
     return model_dir
 
 
-def _find_missing_dependencies(model_names: list[str]) -> dict[str, list[str]]:
+def _find_missing_dependencies(model_names: list[str], tuning_backend: str) -> dict[str, list[str]]:
     package_by_model = {
         "elastic_net": ["sklearn"],
         "xgboost": ["xgboost"],
@@ -102,7 +109,10 @@ def _find_missing_dependencies(model_names: list[str]) -> dict[str, list[str]]:
     }
     missing_by_model: dict[str, list[str]] = {}
     for model_name in model_names:
-        required_packages = package_by_model.get(model_name, [])
+        required_packages = list(package_by_model.get(model_name, []))
+        effective_backend = resolve_tuning_backend(model_name, tuning_backend)
+        if effective_backend == "optuna":
+            required_packages.append("optuna")
         missing = [
             package_name
             for package_name in required_packages
@@ -113,8 +123,8 @@ def _find_missing_dependencies(model_names: list[str]) -> dict[str, list[str]]:
     return missing_by_model
 
 
-def _raise_for_missing_dependencies(model_names: list[str]) -> None:
-    missing_by_model = _find_missing_dependencies(model_names)
+def _raise_for_missing_dependencies(model_names: list[str], tuning_backend: str) -> None:
+    missing_by_model = _find_missing_dependencies(model_names, tuning_backend)
     if not missing_by_model:
         return
 
@@ -122,6 +132,7 @@ def _raise_for_missing_dependencies(model_names: list[str]) -> None:
         "sklearn": "scikit-learn",
         "xgboost": "xgboost",
         "torch": "torch",
+        "optuna": "optuna",
     }
     missing_packages = sorted(
         {
@@ -424,17 +435,65 @@ def _tune_model(
     target_column: str,
     args: argparse.Namespace,
     progress_enabled: bool,
-) -> tuple[dict[str, object], pd.DataFrame]:
+) -> TuningResult:
     tuning_block = blocks[0]
     parameter_grid = _build_parameter_grid(model_name, args)
+    effective_backend = resolve_tuning_backend(model_name, args.tuning_backend)
 
     if args.tuning_mode == "off":
         summary = pd.DataFrame([{**parameter_grid[0], "validation_score": np.nan}])
-        return parameter_grid[0], summary
+        return TuningResult(
+            selected_params=parameter_grid[0],
+            summary=summary,
+            backend="off",
+            metadata={},
+        )
+
+    if effective_backend == "optuna":
+        if model_name not in SEQUENCE_MODELS:
+            raise ValueError("Optuna tuning is only supported for torch sequence models.")
+        _log_message(
+            (
+                f"optuna tuning {model_name} on pre-test window "
+                f"{tuning_block.test_start_date.date()} with {args.optuna_trials} trial(s)"
+            ),
+            progress_enabled=progress_enabled,
+        )
+        result = tune_sequence_model_with_optuna(
+            model_name=model_name,
+            task_type=args.task_type,
+            df=df,
+            train_index=tuning_block.train_index,
+            validation_index=tuning_block.validation_index,
+            feature_columns=feature_columns,
+            target_column=target_column,
+            source_column=args.classification_source_column,
+            metric=args.tuning_metric,
+            lookback_window=args.lookback_window,
+            epochs=args.tuning_torch_epochs,
+            batch_size=args.torch_batch_size,
+            learning_rate=args.torch_learning_rate,
+            training_loss=args.torch_loss,
+            device_name=args.torch_device,
+            n_trials=args.optuna_trials,
+            timeout_seconds=args.optuna_timeout_seconds,
+            pruner_name=args.optuna_pruner,
+            random_seed=args.optuna_seed,
+        )
+        _log_message(
+            f"selected params for {model_name}: {result.selected_params}",
+            progress_enabled=progress_enabled,
+        )
+        return result
+
+    if effective_backend != "grid":
+        raise ValueError(f"Unsupported tuning backend {effective_backend}.")
+    if model_name not in GRID_MODELS and model_name not in SEQUENCE_MODELS:
+        raise ValueError(f"Unsupported model {model_name}.")
 
     _log_message(
         (
-            f"tuning {model_name} on pre-test window "
+            f"grid tuning {model_name} on pre-test window "
             f"{tuning_block.test_start_date.date()} with {len(parameter_grid)} candidate(s)"
         ),
         progress_enabled=progress_enabled,
@@ -541,7 +600,12 @@ def _tune_model(
         f"selected params for {model_name}: {selected_params}",
         progress_enabled=progress_enabled,
     )
-    return selected_params, summary
+    return TuningResult(
+        selected_params=selected_params,
+        summary=summary,
+        backend="grid",
+        metadata={"grid_candidates": len(parameter_grid)},
+    )
 
 
 def _append_optional_argument(command: list[str], flag: str, value: object | None) -> None:
@@ -620,11 +684,21 @@ def _build_worker_command(
         str(args.transaction_cost_bps),
         "--tuning-mode",
         args.tuning_mode,
+        "--tuning-backend",
+        args.tuning_backend,
         "--tuning-metric",
         args.tuning_metric,
         "--tuning-torch-epochs",
         str(args.tuning_torch_epochs),
+        "--optuna-trials",
+        str(args.optuna_trials),
+        "--optuna-pruner",
+        args.optuna_pruner,
+        "--optuna-seed",
+        str(args.optuna_seed),
     ]
+    if args.optuna_timeout_seconds is not None:
+        command.extend(["--optuna-timeout-seconds", str(args.optuna_timeout_seconds)])
     command = [part for part in command if part]
     if args.no_progress:
         command.append("--no-progress")
@@ -1069,6 +1143,12 @@ def main() -> None:
         help="Hyperparameter tuning scope. Default tunes on the pre-test split once and freezes parameters for the walk-forward test.",
     )
     parser.add_argument(
+        "--tuning-backend",
+        choices=("auto", "grid", "optuna"),
+        default="auto",
+        help="Tuning backend. Auto uses grid for classical models and Optuna for torch sequence models.",
+    )
+    parser.add_argument(
         "--tuning-metric",
         choices=("qlike", "mae", "rmse", "accuracy", "balanced_accuracy", "macro_f1"),
         default="qlike",
@@ -1081,13 +1161,37 @@ def main() -> None:
         help="Training epochs used during the one-time LSTM/CNN tuning stage.",
     )
     parser.add_argument(
+        "--optuna-trials",
+        type=int,
+        default=30,
+        help="Number of Optuna trials for sequence-model tuning when the Optuna backend is active.",
+    )
+    parser.add_argument(
+        "--optuna-timeout-seconds",
+        type=int,
+        default=None,
+        help="Optional wall-clock timeout for each Optuna study.",
+    )
+    parser.add_argument(
+        "--optuna-pruner",
+        choices=("none", "median", "successive_halving"),
+        default="median",
+        help="Optuna pruner used for sequence-model tuning.",
+    )
+    parser.add_argument(
+        "--optuna-seed",
+        type=int,
+        default=42,
+        help="Random seed for the Optuna sampler.",
+    )
+    parser.add_argument(
         "--worker-mode",
         action="store_true",
         help=argparse.SUPPRESS,
     )
     args = parser.parse_args()
     progress_enabled = not args.no_progress
-    _raise_for_missing_dependencies(args.models)
+    _raise_for_missing_dependencies(args.models, args.tuning_backend)
     if args.task_type == "regression" and args.tuning_metric in {"accuracy", "balanced_accuracy", "macro_f1"}:
         raise SystemExit("Classification metrics are only valid with `--task-type classification`.")
     if args.task_type == "classification" and args.tuning_metric in {"qlike", "mae", "rmse"}:
@@ -1136,7 +1240,7 @@ def main() -> None:
     _log_message(
         (
             f"running {len(args.models)} model(s) across {len(blocks)} walk-forward block(s); "
-            f"test starts {args.test_start_date}; tuning={args.tuning_mode}/{args.tuning_metric}"
+            f"test starts {args.test_start_date}; tuning={args.tuning_mode}/{args.tuning_backend}/{args.tuning_metric}"
         ),
         progress_enabled=progress_enabled,
     )
@@ -1149,7 +1253,7 @@ def main() -> None:
             f"starting model {model_position}/{len(args.models)}: {model_name}",
             progress_enabled=progress_enabled,
         )
-        selected_params, tuning_summary = _tune_model(
+        tuning_result = _tune_model(
             model_name=model_name,
             df=df,
             blocks=blocks,
@@ -1158,6 +1262,8 @@ def main() -> None:
             args=args,
             progress_enabled=progress_enabled,
         )
+        selected_params = tuning_result.selected_params
+        tuning_summary = tuning_result.summary
         predictions, explainability, training_history = _run_single_model(
             model_name=model_name,
             df=df,
@@ -1219,6 +1325,8 @@ def main() -> None:
             "classification_source_column": args.classification_source_column,
             "test_start_date": args.test_start_date,
             "selected_params": selected_params,
+            "tuning_backend": tuning_result.backend,
+            "tuning_metadata": tuning_result.metadata,
             "torch_loss": args.torch_loss if model_name in {"lstm", "cnn", "cnn_lstm", "ctts"} else None,
             "torch_device": args.torch_device if model_name in {"lstm", "cnn", "cnn_lstm", "ctts"} else None,
             "metrics": metric_summary,
