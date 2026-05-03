@@ -92,6 +92,13 @@ def _copy_if_exists(source_path: Path, destination_path: Path) -> None:
         shutil.copy2(source_path, destination_path)
 
 
+def _copy_first_existing(source_paths: list[Path], destination_path: Path) -> None:
+    for source_path in source_paths:
+        if source_path.exists():
+            shutil.copy2(source_path, destination_path)
+            return
+
+
 def _model_results_dir(results_root: Path, model_name: str) -> Path:
     model_dir = results_root / model_name
     model_dir.mkdir(parents=True, exist_ok=True)
@@ -619,6 +626,8 @@ def _path_has_task_namespace(path: Path, task_type: str) -> bool:
     parts = [part.lower() for part in path.parts]
     if normalized_task_type in parts:
         return True
+    if any(normalized_task_type in part for part in parts):
+        return True
     return normalized_task_type in path.name.lower()
 
 
@@ -795,10 +804,19 @@ def _run_models_isolated(
             f"tuning_summary_{model_name}.csv",
             f"selected_params_{model_name}.json",
         ]:
-            _copy_if_exists(worker_output_dir / artifact_name, output_dir / artifact_name)
+            _copy_first_existing(
+                [
+                    worker_output_dir / artifact_name,
+                    worker_output_dir / args.task_type / artifact_name,
+                ],
+                output_dir / artifact_name,
+            )
 
-        _copy_if_exists(
-            worker_output_dir / "run_manifest.json",
+        _copy_first_existing(
+            [
+                worker_output_dir / "run_manifest.json",
+                worker_output_dir / args.task_type / "run_manifest.json",
+            ],
             output_dir / f"run_manifest_{model_name}.json",
         )
 

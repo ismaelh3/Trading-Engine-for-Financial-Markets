@@ -258,7 +258,7 @@ Experiment outputs are task-scoped. If the path does not already include `regres
 Examples:
 
 - `--output-dir artifacts/m1 --task-type regression` writes to `artifacts/m1/regression`
-- `--output-dir artifacts/m1_classification --task-type classification` writes to `artifacts/m1_classification/classification`
+- `--output-dir artifacts/m1_classification --task-type classification` writes to `artifacts/m1_classification`
 - `--results-root results --task-type regression` writes to `results/regression`
 - `--results-root results --task-type classification` writes to `results/classification`
 
@@ -292,7 +292,7 @@ Classification plots:
 ```bash
 python scripts/plot_m1_classification_results.py \
   --results-root results/classification \
-  --artifacts-dir artifacts/m1_classification/classification \
+  --artifacts-dir artifacts/m1_classification \
   --classification-model ctts \
   --equity-models naive elastic_net xgboost lstm cnn cnn_lstm ctts \
   --output-dir plots/classification
