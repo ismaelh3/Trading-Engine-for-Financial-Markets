@@ -13,3 +13,4 @@ torch
 transformers
 scikit-learn
 xgboost
+optuna
