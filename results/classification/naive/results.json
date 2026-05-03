@@ -8,34 +8,38 @@
   "selected_params": {
     "current_vol_feature": "feat_realized_vol_5d"
   },
+  "tuning_backend": "grid",
+  "tuning_metadata": {
+    "grid_candidates": 3
+  },
   "torch_loss": null,
   "torch_device": null,
   "metrics": {
-    "accuracy": 0.5086872586872587,
-    "balanced_accuracy": 0.5310575019483835,
-    "macro_f1": 0.5150302737104884,
-    "n_predictions": 1036.0,
+    "accuracy": 0.5047348484848485,
+    "balanced_accuracy": 0.5259376416991365,
+    "macro_f1": 0.5109808482795368,
+    "n_predictions": 1056.0,
     "model": "naive"
   },
   "backtest": {
-    "strategy_annualized_return": 0.08969326099480268,
-    "strategy_annualized_volatility": 0.08398696201399014,
-    "strategy_sharpe_ratio": 1.067942676386628,
-    "strategy_max_drawdown": -0.08551050169238128,
-    "strategy_average_weight": 0.5260617760617761,
-    "strategy_turnover_total": 61.5,
-    "benchmark_annualized_return": 0.10783972032943678,
-    "benchmark_annualized_volatility": 0.1782841709271297,
-    "benchmark_sharpe_ratio": 0.6048754624072277,
-    "benchmark_max_drawdown": -0.24496408139383452,
-    "observations": 1036.0,
+    "strategy_annualized_return": 0.08001051701549855,
+    "strategy_annualized_volatility": 0.08423350130523985,
+    "strategy_sharpe_ratio": 0.9498657395893075,
+    "strategy_max_drawdown": -0.08551064845334067,
+    "strategy_average_weight": 0.5279356060606061,
+    "strategy_turnover_total": 62.5,
+    "benchmark_annualized_return": 0.09604574170471203,
+    "benchmark_annualized_volatility": 0.17750193039423856,
+    "benchmark_sharpe_ratio": 0.5410968854895875,
+    "benchmark_max_drawdown": -0.24496391141213048,
+    "observations": 1056.0,
     "model": "naive"
   },
   "artifacts": {
-    "predictions_csv": "artifacts/m1_classification/_model_runs/naive/classification/predictions_naive.csv",
-    "backtest_csv": "artifacts/m1_classification/_model_runs/naive/classification/backtest_naive.csv",
-    "tuning_summary_csv": "artifacts/m1_classification/_model_runs/naive/classification/tuning_summary_naive.csv",
-    "selected_params_json": "artifacts/m1_classification/_model_runs/naive/classification/selected_params_naive.json",
+    "predictions_csv": "artifacts/m1_classification/_model_runs/naive/predictions_naive.csv",
+    "backtest_csv": "artifacts/m1_classification/_model_runs/naive/backtest_naive.csv",
+    "tuning_summary_csv": "artifacts/m1_classification/_model_runs/naive/tuning_summary_naive.csv",
+    "selected_params_json": "artifacts/m1_classification/_model_runs/naive/selected_params_naive.json",
     "training_history_csv": null,
     "explainability_csv": null
   }

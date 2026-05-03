@@ -6,8 +6,8 @@
   "classification_source_column": "target_future_vol_20d",
   "test_start_date": "2022-01-03",
   "selected_params": {
-    "n_estimators": 200,
-    "max_depth": 3,
+    "n_estimators": 400,
+    "max_depth": 2,
     "learning_rate": 0.03,
     "subsample": 0.9,
     "colsample_bytree": 0.9,
@@ -15,35 +15,39 @@
     "reg_alpha": 0.0,
     "reg_lambda": 1.0
   },
+  "tuning_backend": "grid",
+  "tuning_metadata": {
+    "grid_candidates": 8
+  },
   "torch_loss": null,
   "torch_device": null,
   "metrics": {
-    "accuracy": 0.5743243243243243,
-    "balanced_accuracy": 0.5898382212484926,
-    "macro_f1": 0.5746145966872164,
-    "n_predictions": 1036.0,
+    "accuracy": 0.5880681818181818,
+    "balanced_accuracy": 0.6000738952696741,
+    "macro_f1": 0.589295764868244,
+    "n_predictions": 1056.0,
     "model": "xgboost"
   },
   "backtest": {
-    "strategy_annualized_return": 0.043959509913848116,
-    "strategy_annualized_volatility": 0.06976848832893688,
-    "strategy_sharpe_ratio": 0.6300768580020338,
-    "strategy_max_drawdown": -0.07108503080711037,
-    "strategy_average_weight": 0.46814671814671815,
-    "strategy_turnover_total": 29.5,
-    "benchmark_annualized_return": 0.10783972032943678,
-    "benchmark_annualized_volatility": 0.1782841709271297,
-    "benchmark_sharpe_ratio": 0.6048754624072277,
-    "benchmark_max_drawdown": -0.24496408139383452,
-    "observations": 1036.0,
+    "strategy_annualized_return": 0.03364283851705174,
+    "strategy_annualized_volatility": 0.07069433405719916,
+    "strategy_sharpe_ratio": 0.47589158262430403,
+    "strategy_max_drawdown": -0.07711892467118908,
+    "strategy_average_weight": 0.4758522727272727,
+    "strategy_turnover_total": 32.5,
+    "benchmark_annualized_return": 0.09604574170471203,
+    "benchmark_annualized_volatility": 0.17750193039423856,
+    "benchmark_sharpe_ratio": 0.5410968854895875,
+    "benchmark_max_drawdown": -0.24496391141213048,
+    "observations": 1056.0,
     "model": "xgboost"
   },
   "artifacts": {
-    "predictions_csv": "artifacts/m1_classification/_model_runs/xgboost/classification/predictions_xgboost.csv",
-    "backtest_csv": "artifacts/m1_classification/_model_runs/xgboost/classification/backtest_xgboost.csv",
-    "tuning_summary_csv": "artifacts/m1_classification/_model_runs/xgboost/classification/tuning_summary_xgboost.csv",
-    "selected_params_json": "artifacts/m1_classification/_model_runs/xgboost/classification/selected_params_xgboost.json",
+    "predictions_csv": "artifacts/m1_classification/_model_runs/xgboost/predictions_xgboost.csv",
+    "backtest_csv": "artifacts/m1_classification/_model_runs/xgboost/backtest_xgboost.csv",
+    "tuning_summary_csv": "artifacts/m1_classification/_model_runs/xgboost/tuning_summary_xgboost.csv",
+    "selected_params_json": "artifacts/m1_classification/_model_runs/xgboost/selected_params_xgboost.json",
     "training_history_csv": null,
-    "explainability_csv": "artifacts/m1_classification/_model_runs/xgboost/classification/explainability_xgboost.csv"
+    "explainability_csv": "artifacts/m1_classification/_model_runs/xgboost/explainability_xgboost.csv"
   }
 }
