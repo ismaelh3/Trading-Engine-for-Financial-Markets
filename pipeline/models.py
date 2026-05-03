@@ -618,6 +618,7 @@ def _fit_torch_sequence_predict(
     device_name: str,
     log_epoch_losses: bool,
     model_params: dict[str, object] | None,
+    optuna_trial: object | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, pd.DataFrame]:
     torch, nn, DataLoader, TensorDataset = _require_torch()
     _set_torch_seed(torch)
@@ -944,6 +945,10 @@ def _fit_torch_sequence_predict(
             patience_left -= 1
             if patience_left == 0:
                 break
+        if optuna_trial is not None:
+            optuna_trial.report(validation_loss, step=epoch_index)
+            if optuna_trial.should_prune():
+                raise RuntimeError("OPTUNA_TRIAL_PRUNED")
 
     if best_state is not None:
         model.load_state_dict(best_state)
@@ -1005,6 +1010,7 @@ def run_torch_sequence_block(
         device_name=device_name,
         log_epoch_losses=log_epoch_losses,
         model_params=model_params,
+        optuna_trial=None,
     )
 
     train_target = df.loc[train_index, target_column]
@@ -1061,6 +1067,7 @@ def tune_torch_sequence_model(
             device_name=device_name,
             log_epoch_losses=False,
             model_params=params,
+            optuna_trial=None,
         )
         validation_score = _validation_score(actual_log_vol, predicted_log_vol, metric)
         rows.append(
@@ -1416,6 +1423,7 @@ def _fit_torch_sequence_classifier_predict(
     device_name: str,
     log_epoch_losses: bool,
     model_params: dict[str, object] | None,
+    optuna_trial: object | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, float, float, pd.DataFrame]:
     torch, nn, DataLoader, TensorDataset = _require_torch()
     _set_torch_seed(torch)
@@ -1732,6 +1740,10 @@ def _fit_torch_sequence_classifier_predict(
             patience_left -= 1
             if patience_left == 0:
                 break
+        if optuna_trial is not None:
+            optuna_trial.report(validation_score, step=epoch_index)
+            if optuna_trial.should_prune():
+                raise RuntimeError("OPTUNA_TRIAL_PRUNED")
 
     if best_state is not None:
         model.load_state_dict(best_state)
@@ -1809,6 +1821,7 @@ def run_torch_sequence_classification_block(
         device_name=device_name,
         log_epoch_losses=log_epoch_losses,
         model_params=model_params,
+        optuna_trial=None,
     )
     return BlockPrediction(
         dates=df.loc[eligible_test_index, "date"],
@@ -1862,6 +1875,7 @@ def tune_torch_sequence_classification_model(
             device_name=device_name,
             log_epoch_losses=False,
             model_params=params,
+            optuna_trial=None,
         )
         validation_score = _classification_score(actual_class, predicted_class, metric)
         rows.append({**params, "validation_score": validation_score})
